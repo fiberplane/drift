@@ -1,5 +1,5 @@
+import { startDriftEditServer } from "../server/index.ts";
 import type { CliContext } from "./types.ts";
-import { startPlaceholderEditServer } from "./vcs.ts";
 
 interface ParsedEditArgs {
   readonly host: string;
@@ -13,7 +13,15 @@ export const runEditCommand = (args: readonly string[], context: CliContext): nu
     return 1;
   }
 
-  const startServer = context.dependencies?.startEditServer ?? startPlaceholderEditServer;
+  const startServer =
+    context.dependencies?.startEditServer ??
+    ((serverArgs: { readonly host: string; readonly port: number }) =>
+      startDriftEditServer({
+        host: serverArgs.host,
+        port: serverArgs.port,
+        cwd: context.cwd,
+      }));
+
   const server = startServer({
     host: parsed.value.host,
     port: parsed.value.port,
