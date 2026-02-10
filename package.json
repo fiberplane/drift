@@ -1,0 +1,23 @@
+{
+  "name": "drift",
+  "private": true,
+  "type": "module",
+  "module": "index.ts",
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt . --write",
+    "format:check": "oxfmt . --check",
+    "check": "bun run lint && bun run format:check && bun run typecheck"
+  },
+  "dependencies": {
+    "@effect/language-service": "^0.73.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@typescript/native-preview": "^7.0.0-dev.20260210.1",
+    "oxfmt": "^0.28.0",
+    "oxlint": "^1.43.0"
+  }
+}
