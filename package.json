@@ -4,6 +4,8 @@
   "type": "module",
   "module": "index.ts",
   "scripts": {
+    "drift": "bun run src/cli/main.ts",
+    "test": "bun test",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
