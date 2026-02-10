@@ -89,7 +89,19 @@ describe("drift CLI", () => {
       join(cwd, ".drift", "cells", "1", "artifacts", "summary.md"),
       "utf8",
     );
+    const patch = readFileSync(
+      join(cwd, ".drift", "cells", "1", "artifacts", "build.patch"),
+      "utf8",
+    );
+    const buildYaml = readFileSync(
+      join(cwd, ".drift", "cells", "1", "artifacts", "build.yaml"),
+      "utf8",
+    );
+
     expect(summary).toContain("Data Model");
+    expect(patch).toContain("--- /dev/null");
+    expect(buildYaml).toContain("  - src/generated/cell-1.md");
+    expect(buildYaml).toContain(`timestamp: ${FIXED_TIME.toISOString()}`);
 
     rmSync(cwd, { recursive: true, force: true });
   });

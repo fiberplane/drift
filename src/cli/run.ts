@@ -12,6 +12,7 @@ import {
   type ExecutionCell,
   type Result,
 } from "../core/execution-engine.ts";
+import { applyUnifiedDiff } from "../core/diff.ts";
 import { formatIndexList, summarizeDiff } from "./format.ts";
 import {
   ensureGeneratedFile,
@@ -206,7 +207,6 @@ const createBuildCallbacks = (args: {
       }
 
       const generated = ensureGeneratedFile({
-        rootDir: args.project.rootDir,
         cellIndex: sourceCell.index,
         title: sourceCell.title,
         content: sourceCell.content,
@@ -218,9 +218,31 @@ const createBuildCallbacks = (args: {
         }
       }
 
+      const applyResult = applyUnifiedDiff({
+        cwd: args.project.rootDir,
+        cellIndex: sourceCell.index,
+        rawOutput: generated.patch,
+      });
+
+      if (!applyResult.ok) {
+        if (applyResult.error._tag === "InvalidDiffError") {
+          return err({
+            tag: "invalid-diff",
+            cellIndex: sourceCell.index,
+            message: "Generated output was not a valid unified diff.",
+          });
+        }
+
+        return err({
+          tag: "diff-apply",
+          cellIndex: sourceCell.index,
+          message: applyResult.error.stderr,
+        });
+      }
+
       return ok({
-        files: [generated.relativePath],
-        patch: generated.patch,
+        files: applyResult.value.files,
+        patch: applyResult.value.patch,
         timestamp: args.context.now().toISOString(),
       });
     },

@@ -1,4 +1,5 @@
 export * from "./assembler.ts";
+export * from "./build-artifacts.ts";
 export * from "./dag.ts";
 export * from "./diff.ts";
 export * from "./errors.ts";

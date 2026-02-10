@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
+import { writeBuildArtifacts } from "../core/build-artifacts.ts";
 import {
   err,
   ok,
@@ -365,7 +366,6 @@ export const initializeProjectFromMarkdown = (args: {
 };
 
 export const ensureGeneratedFile = (args: {
-  readonly rootDir: string;
   readonly cellIndex: number;
   readonly title: string;
   readonly content: string;
@@ -374,15 +374,11 @@ export const ensureGeneratedFile = (args: {
   readonly patch: string;
 } => {
   const relativePath = normalizePath(join("src", "generated", `cell-${args.cellIndex}.md`));
-  const absolutePath = join(args.rootDir, relativePath);
-  mkdirSync(dirname(absolutePath), { recursive: true });
-
   const generated = `# ${args.title}\n\n${args.content.trimEnd()}\n`;
-  writeFileSync(absolutePath, generated);
 
   const lines = generated.trimEnd().split("\n");
   const patchLines = [
-    `--- a/${relativePath}`,
+    "--- /dev/null",
     `+++ b/${relativePath}`,
     `@@ -0,0 +1,${lines.length} @@`,
     ...lines.map((line) => `+${line}`),
@@ -529,47 +525,6 @@ const parseBuildYaml = (yaml: string): ParsedBuildMetadata => {
     ref,
     timestamp,
   };
-};
-
-const writeBuildArtifacts = (args: {
-  readonly cellDir: string;
-  readonly artifact: BuildArtifact;
-  readonly ref: string | null;
-}): void => {
-  const artifactsDir = join(args.cellDir, "artifacts");
-  mkdirSync(artifactsDir, { recursive: true });
-
-  const buildYaml = renderBuildYaml({
-    files: args.artifact.files,
-    ref: args.ref,
-    timestamp: args.artifact.timestamp,
-  });
-
-  writeFileSync(join(artifactsDir, "build.yaml"), buildYaml);
-  writeFileSync(join(artifactsDir, "build.patch"), args.artifact.patch);
-  writeFileSync(join(artifactsDir, "summary.md"), args.artifact.summary);
-};
-
-const renderBuildYaml = (args: {
-  readonly files: readonly string[];
-  readonly ref: string | null;
-  readonly timestamp: string;
-}): string => {
-  const lines: string[] = [];
-
-  if (args.files.length === 0) {
-    lines.push("files: []");
-  } else {
-    lines.push("files:");
-    for (const file of args.files) {
-      lines.push(`  - ${file}`);
-    }
-  }
-
-  lines.push(`ref: ${args.ref ?? "null"}`);
-  lines.push(`timestamp: ${args.timestamp}`);
-
-  return `${lines.join("\n")}\n`;
 };
 
 const buildPlannedCellContent = (content: string, nowIso: string): string => {
