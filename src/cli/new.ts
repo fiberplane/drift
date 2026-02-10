@@ -1,10 +1,12 @@
+import { Either } from "effect";
+
 import { createNewProject, type ProjectError } from "./project-store.ts";
 import type { CliContext } from "./types.ts";
 
 export const runNewCommand = (_args: readonly string[], context: CliContext): number => {
   const result = createNewProject(context.cwd);
-  if (!result.ok) {
-    printProjectError(context, result.error);
+  if (Either.isLeft(result)) {
+    printProjectError(context, result.left);
     return 1;
   }
 

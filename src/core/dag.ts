@@ -1,3 +1,5 @@
+import { Either } from "effect";
+
 import { DagCycleError } from "./errors.ts";
 import type { Cell } from "./schemas.ts";
 
@@ -6,16 +8,6 @@ export interface DagGraph {
   readonly dependentsByCell: ReadonlyMap<number, ReadonlyArray<number>>;
   readonly levels: ReadonlyArray<ReadonlyArray<number>>;
 }
-
-export type DagResult<A> =
-  | {
-      readonly ok: true;
-      readonly value: A;
-    }
-  | {
-      readonly ok: false;
-      readonly error: DagCycleError;
-    };
 
 export const orderCellsByIndex = (cells: ReadonlyArray<Cell>): ReadonlyArray<Cell> =>
   [...cells].sort((left, right) => left.index - right.index);
@@ -32,23 +24,20 @@ export const getCellByIndex = (cells: ReadonlyArray<Cell>, index: number): Cell 
 
 export const buildDagGraph = (
   dependenciesByCell: ReadonlyMap<number, ReadonlyArray<number>>,
-): DagResult<DagGraph> => {
+): Either.Either<DagGraph, DagCycleError> => {
   const normalizedDependencies = normalizeDependencyMap(dependenciesByCell);
   const dependentsByCell = computeDependents(normalizedDependencies);
   const levelsResult = topologicalLevels(normalizedDependencies, dependentsByCell);
 
-  if (!levelsResult.ok) {
-    return levelsResult;
+  if (Either.isLeft(levelsResult)) {
+    return Either.left(levelsResult.left);
   }
 
-  return {
-    ok: true,
-    value: {
-      dependenciesByCell: normalizedDependencies,
-      dependentsByCell,
-      levels: levelsResult.value,
-    },
-  };
+  return Either.right({
+    dependenciesByCell: normalizedDependencies,
+    dependentsByCell,
+    levels: levelsResult.right,
+  });
 };
 
 export const computeDependents = (
@@ -90,7 +79,7 @@ export const computeDependents = (
 export const topologicalLevels = (
   dependenciesByCell: ReadonlyMap<number, ReadonlyArray<number>>,
   dependentsByCell: ReadonlyMap<number, ReadonlyArray<number>>,
-): DagResult<ReadonlyArray<ReadonlyArray<number>>> => {
+): Either.Either<ReadonlyArray<ReadonlyArray<number>>, DagCycleError> => {
   const indegree = new Map<number, number>();
 
   for (const cellIndex of dependenciesByCell.keys()) {
@@ -148,16 +137,10 @@ export const topologicalLevels = (
       .map((entry) => entry[0])
       .sort((left, right) => left - right);
 
-    return {
-      ok: false,
-      error: new DagCycleError({ cells: cycleCells }),
-    };
+    return Either.left(new DagCycleError({ cells: cycleCells }));
   }
 
-  return {
-    ok: true,
-    value: levels,
-  };
+  return Either.right(levels);
 };
 
 export const applyDagToCells = (args: {

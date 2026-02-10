@@ -1,0 +1,11 @@
+id: no-create-event-dispatcher
+language: Html
+message: Use callback props instead of createEventDispatcher
+severity: error
+files:
+  - src/**/*.svelte
+rule:
+  pattern: <script $ATTRS>$BODY</script>
+constraints:
+  BODY:
+    regex: "\\bcreateEventDispatcher\\s*\\("

@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { Either } from "effect";
+
 import { runCli } from "./index.ts";
 import type { CliContext, CliDependencies } from "./types.ts";
 
@@ -165,10 +167,7 @@ describe("drift CLI", () => {
     expect(runCliInDirectory(["run", "--no-stream"], cwd).exitCode).toBe(0);
 
     const commitResult = runCliInDirectory(["commit", "1"], cwd, {
-      commitFiles: () => ({
-        ok: true,
-        ref: "deadbeef",
-      }),
+      commitFiles: () => Either.right({ ref: "deadbeef" }),
     });
 
     expect(commitResult.exitCode).toBe(0);
@@ -195,10 +194,7 @@ describe("drift CLI", () => {
     expect(runCliInDirectory(["run", "--no-stream"], cwd).exitCode).toBe(0);
 
     const commitResult = runCliInDirectory(["commit", "1"], cwd, {
-      commitFiles: () => ({
-        ok: false,
-        message: "simulated VCS failure",
-      }),
+      commitFiles: () => Either.left({ message: "simulated VCS failure" }),
     });
 
     expect(commitResult.exitCode).toBe(1);

@@ -1,0 +1,11 @@
+id: no-svelte-stores
+language: Html
+message: Use $state() rune instead of writable/readable/derived stores
+severity: error
+files:
+  - src/**/*.svelte
+rule:
+  pattern: <script $ATTRS>$BODY</script>
+constraints:
+  BODY:
+    regex: "import\\s+\\{[^}]*\\b(writable|readable|derived)\\b[^}]*\\}\\s+from\\s+[\"']svelte/store[\"']"

@@ -1,4 +1,5 @@
-import { err, ok, type Result } from "./execution-engine.ts";
+import { Either } from "effect";
+
 import { InlineCommandError } from "./errors.ts";
 import type { Inline } from "./schemas.ts";
 
@@ -34,7 +35,7 @@ export const parseInlines = (content: string): ReadonlyArray<Inline> => {
 
 export const resolveInlinesInContent = (
   args: ResolveInlinesArgs,
-): Result<InlineCommandError, string> => {
+): Either.Either<string, InlineCommandError> => {
   const lines = normalizeNewlines(args.content).split("\n");
   const resolvedLines: string[] = [];
 
@@ -56,24 +57,24 @@ export const resolveInlinesInContent = (
       cellIndex: args.cellIndex,
       projectRoot: args.projectRoot,
     });
-    if (!lineResult.ok) {
+    if (Either.isLeft(lineResult)) {
       return lineResult;
     }
 
-    resolvedLines.push(lineResult.value);
+    resolvedLines.push(lineResult.right);
   }
 
-  return ok(resolvedLines.join("\n"));
+  return Either.right(resolvedLines.join("\n"));
 };
 
 const resolveInlinesInLine = (args: {
   readonly line: string;
   readonly cellIndex: number;
   readonly projectRoot: string;
-}): Result<InlineCommandError, string> => {
+}): Either.Either<string, InlineCommandError> => {
   const matches = [...args.line.matchAll(INLINE_REFERENCE_PATTERN)];
   if (matches.length === 0) {
-    return ok(args.line);
+    return Either.right(args.line);
   }
 
   let resolved = "";
@@ -95,23 +96,23 @@ const resolveInlinesInLine = (args: {
       projectRoot: args.projectRoot,
       command,
     });
-    if (!commandResult.ok) {
+    if (Either.isLeft(commandResult)) {
       return commandResult;
     }
 
-    resolved += commandResult.value;
+    resolved += commandResult.right;
     cursor = start + rawMatch.length;
   }
 
   resolved += args.line.slice(cursor);
-  return ok(resolved);
+  return Either.right(resolved);
 };
 
 const executeInlineCommand = (args: {
   readonly cellIndex: number;
   readonly projectRoot: string;
   readonly command: string;
-}): Result<InlineCommandError, string> => {
+}): Either.Either<string, InlineCommandError> => {
   const result = Bun.spawnSync({
     cmd: ["/bin/bash", "-lc", args.command],
     cwd: args.projectRoot,
@@ -120,7 +121,7 @@ const executeInlineCommand = (args: {
   });
 
   if (result.exitCode !== 0) {
-    return err(
+    return Either.left(
       new InlineCommandError({
         cellIndex: args.cellIndex,
         command: args.command,
@@ -130,7 +131,7 @@ const executeInlineCommand = (args: {
     );
   }
 
-  return ok(textDecoder.decode(result.stdout));
+  return Either.right(textDecoder.decode(result.stdout));
 };
 
 const normalizeNewlines = (value: string): string => value.replaceAll("\r\n", "\n");

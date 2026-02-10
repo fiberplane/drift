@@ -1,16 +1,15 @@
 import { join } from "node:path";
 
+import { Either } from "effect";
+
 import { formatAgentError, resolveAgentSelection, streamAgentCall } from "../agent/index.ts";
 import {
-  err,
-  ok,
   runAllStaleBuild,
   runOneCellBuild,
   type BuildCallbacks,
   type BuildExecutionReport,
   type EngineError,
   type ExecutionCell,
-  type Result,
 } from "../core/execution-engine.ts";
 import { applyUnifiedDiff } from "../core/diff.ts";
 import { formatIndexList, summarizeDiff } from "./format.ts";
@@ -33,85 +32,85 @@ interface ParsedRunArgs {
 
 export const runRunCommand = (args: readonly string[], context: CliContext): number => {
   const parsedArgs = parseRunArgs(args);
-  if (!parsedArgs.ok) {
-    context.writeError(parsedArgs.error);
+  if (Either.isLeft(parsedArgs)) {
+    context.writeError(parsedArgs.left);
     return 1;
   }
 
-  if (parsedArgs.value.markdownPath !== null) {
-    const markdownPath = join(context.cwd, parsedArgs.value.markdownPath);
+  if (parsedArgs.right.markdownPath !== null) {
+    const markdownPath = join(context.cwd, parsedArgs.right.markdownPath);
     const initResult = initializeProjectFromMarkdown({
       rootDir: context.cwd,
       markdownPath,
       nowIso: context.now().toISOString(),
     });
 
-    if (!initResult.ok) {
-      printProjectError(context, initResult.error);
+    if (Either.isLeft(initResult)) {
+      printProjectError(context, initResult.left);
       return 1;
     }
 
-    context.writeLine(`✓ Initialized .drift from ${parsedArgs.value.markdownPath}`);
+    context.writeLine(`✓ Initialized .drift from ${parsedArgs.right.markdownPath}`);
   }
 
   const projectResult = loadProject(context.cwd);
-  if (!projectResult.ok) {
-    printProjectError(context, projectResult.error);
+  if (Either.isLeft(projectResult)) {
+    printProjectError(context, projectResult.left);
     return 1;
   }
 
-  const project = projectResult.value;
+  const project = projectResult.right;
   const callbacks = createBuildCallbacks({
     project,
-    stream: parsedArgs.value.stream,
+    stream: parsedArgs.right.stream,
     context,
   });
 
   const executionCells = project.cells.map(toExecutionCell);
 
   const report =
-    parsedArgs.value.targetCell === null
+    parsedArgs.right.targetCell === null
       ? runAllStaleBuild({
           cells: executionCells,
           callbacks,
         })
       : runOneCellBuild({
           cells: executionCells,
-          targetCell: parsedArgs.value.targetCell,
+          targetCell: parsedArgs.right.targetCell,
           callbacks,
         });
 
-  if (!report.ok) {
-    printEngineError(context, report.error);
+  if (Either.isLeft(report)) {
+    printEngineError(context, report.left);
     return 1;
   }
 
   const persistResult = persistExecutionArtifacts({
     project,
-    executedCellIndexes: report.value.executed,
-    updatedCells: report.value.cells,
+    executedCellIndexes: report.right.executed,
+    updatedCells: report.right.cells,
   });
 
-  if (!persistResult.ok) {
-    printProjectError(context, persistResult.error);
+  if (Either.isLeft(persistResult)) {
+    printProjectError(context, persistResult.left);
     return 1;
   }
 
-  if (parsedArgs.value.targetCell === null) {
-    printRunAllSummary({ context, project, report: report.value });
+  if (parsedArgs.right.targetCell === null) {
+    printRunAllSummary({ context, project, report: report.right });
   } else {
     printRunOneSummary({
       context,
       project,
-      report: report.value,
-      targetCell: parsedArgs.value.targetCell,
+      report: report.right,
+      targetCell: parsedArgs.right.targetCell,
     });
   }
 
   return 0;
 };
 
-const parseRunArgs = (args: readonly string[]): Result<string, ParsedRunArgs> => {
+const parseRunArgs = (args: readonly string[]): Either.Either<ParsedRunArgs, string> => {
   let stream = true;
   const positional: string[] = [];
 
@@ -125,20 +124,20 @@ const parseRunArgs = (args: readonly string[]): Result<string, ParsedRunArgs> =>
   }
 
   if (positional.length > 1) {
-    return err("Usage: drift run [cell|file.md] [--no-stream]");
+    return Either.left("Usage: drift run [cell|file.md] [--no-stream]");
   }
 
   const first = positional[0];
   if (first === undefined) {
-    return ok({ targetCell: null, markdownPath: null, stream });
+    return Either.right({ targetCell: null, markdownPath: null, stream });
   }
 
   const asCell = parseCellIndex(first);
   if (asCell !== null) {
-    return ok({ targetCell: asCell, markdownPath: null, stream });
+    return Either.right({ targetCell: asCell, markdownPath: null, stream });
   }
 
-  return ok({ targetCell: null, markdownPath: first, stream });
+  return Either.right({ targetCell: null, markdownPath: first, stream });
 };
 
 const createBuildCallbacks = (args: {
@@ -155,7 +154,7 @@ const createBuildCallbacks = (args: {
     runBuild: ({ cell }) => {
       const sourceCell = cellsByIndex.get(cell.index);
       if (sourceCell === undefined) {
-        return err({
+        return Either.left({
           tag: "agent-error",
           cellIndex: cell.index,
           message: `Cell ${cell.index} was not found in project map.`,
@@ -178,7 +177,7 @@ const createBuildCallbacks = (args: {
       });
 
       if (!streamedAgent.ok) {
-        return err({
+        return Either.left({
           tag: "agent-error",
           cellIndex: sourceCell.index,
           message: formatAgentError(streamedAgent.error),
@@ -224,32 +223,32 @@ const createBuildCallbacks = (args: {
         rawOutput: generated.patch,
       });
 
-      if (!applyResult.ok) {
-        if (applyResult.error._tag === "InvalidDiffError") {
-          return err({
+      if (Either.isLeft(applyResult)) {
+        if (applyResult.left._tag === "InvalidDiffError") {
+          return Either.left({
             tag: "invalid-diff",
             cellIndex: sourceCell.index,
             message: "Generated output was not a valid unified diff.",
           });
         }
 
-        return err({
+        return Either.left({
           tag: "diff-apply",
           cellIndex: sourceCell.index,
-          message: applyResult.error.stderr,
+          message: applyResult.left.stderr,
         });
       }
 
-      return ok({
-        files: applyResult.value.files,
-        patch: applyResult.value.patch,
+      return Either.right({
+        files: applyResult.right.files,
+        patch: applyResult.right.patch,
         timestamp: args.context.now().toISOString(),
       });
     },
     reviewBuild: ({ cell }) => {
       const sourceCell = cellsByIndex.get(cell.index);
       if (sourceCell === undefined) {
-        return err({
+        return Either.left({
           tag: "agent-error",
           cellIndex: cell.index,
           message: `Cell ${cell.index} was not found in project map.`,
@@ -260,7 +259,7 @@ const createBuildCallbacks = (args: {
         ? "\n⚠ Contains TODO markers that may need follow-up."
         : "";
 
-      return ok(`Added generated scaffold for ${sourceCell.title}.${warnings}`);
+      return Either.right(`Added generated scaffold for ${sourceCell.title}.${warnings}`);
     },
   };
 };

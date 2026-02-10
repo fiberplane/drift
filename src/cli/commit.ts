@@ -1,3 +1,5 @@
+import { Either } from "effect";
+
 import { parseProjectVcsBackend } from "../core/vcs.ts";
 import {
   loadProject,
@@ -22,12 +24,12 @@ export const runCommitCommand = (args: readonly string[], context: CliContext): 
   }
 
   const projectResult = loadProject(context.cwd);
-  if (!projectResult.ok) {
-    printProjectError(context, projectResult.error);
+  if (Either.isLeft(projectResult)) {
+    printProjectError(context, projectResult.left);
     return 1;
   }
 
-  const project = projectResult.value;
+  const project = projectResult.right;
 
   const targetCells =
     requestedCells.length === 0
@@ -82,26 +84,26 @@ export const runCommitCommand = (args: readonly string[], context: CliContext): 
     cellIndices: targetCellIndices,
   });
 
-  if (!commitResult.ok) {
-    context.writeError(`Commit failed: ${commitResult.message}`);
+  if (Either.isLeft(commitResult)) {
+    context.writeError(`Commit failed: ${commitResult.left.message}`);
     return 1;
   }
 
   const updateResult = updateCellCommitRef({
     project,
     cellIndexes: targetCellIndices,
-    ref: commitResult.ref,
+    ref: commitResult.right.ref,
   });
 
-  if (!updateResult.ok) {
-    printProjectError(context, updateResult.error);
+  if (Either.isLeft(updateResult)) {
+    printProjectError(context, updateResult.left);
     return 1;
   }
 
   printCommitSummary({
     context,
     cells: targetCells,
-    ref: commitResult.ref,
+    ref: commitResult.right.ref,
     files: [...allFiles],
   });
 

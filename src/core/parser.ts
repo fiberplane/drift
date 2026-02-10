@@ -1,10 +1,15 @@
 import { Either } from "effect";
 
 import { applyDagToCells, buildDagGraph } from "./dag.ts";
-import { err, ok, type Result } from "./execution-engine.ts";
 import { DagCycleError, ParseMarkdownError } from "./errors.ts";
 import { parseImports } from "./imports.ts";
 import { parseInlines } from "./inlines.ts";
+import {
+  countLeadingSpaces,
+  formatDecodeError,
+  normalizeNewlines,
+  parseYamlScalar,
+} from "./parsing-utils.ts";
 import { resolveDependencies } from "./resolver.ts";
 import {
   decodeAgentBackend,
@@ -34,10 +39,10 @@ export type MarkdownParserError = ParseMarkdownError | DagCycleError;
 
 export const parseProjectMarkdown = (
   markdown: string,
-): Result<MarkdownParserError, ParsedMarkdownProject> => {
+): Either.Either<ParsedMarkdownProject, MarkdownParserError> => {
   const normalized = normalizeNewlines(markdown).trim();
   if (!normalized.startsWith(`${FRONTMATTER_SEPARATOR}\n`)) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: null,
         message: "Assembled markdown must start with YAML frontmatter.",
@@ -47,7 +52,7 @@ export const parseProjectMarkdown = (
 
   const frontmatterEnd = normalized.indexOf(`\n${FRONTMATTER_SEPARATOR}\n`, 4);
   if (frontmatterEnd < 0) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: null,
         message: "Missing closing frontmatter separator.",
@@ -57,15 +62,15 @@ export const parseProjectMarkdown = (
 
   const frontmatter = normalized.slice(4, frontmatterEnd).trimEnd();
   const configResult = decodeConfig(frontmatter);
-  if (!configResult.ok) {
-    return configResult;
+  if (Either.isLeft(configResult)) {
+    return Either.left(configResult.left);
   }
 
   const body = normalized.slice(frontmatterEnd + 5).trim();
   const chunks = splitCellSegments(body);
 
   if (chunks.length === 0) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: null,
         message: "Assembled markdown has no cell sections.",
@@ -84,46 +89,46 @@ export const parseProjectMarkdown = (
       chunk,
       index,
     });
-    if (!cellResult.ok) {
-      return cellResult;
+    if (Either.isLeft(cellResult)) {
+      return Either.left(cellResult.left);
     }
 
-    cells.push(cellResult.value);
+    cells.push(cellResult.right);
   }
 
-  const dependencyMap = resolveDependencies(configResult.value.resolver, cells);
+  const dependencyMap = resolveDependencies(configResult.right.resolver, cells);
   const dagResult = buildDagGraph(dependencyMap);
-  if (!dagResult.ok) {
-    return err(dagResult.error);
+  if (Either.isLeft(dagResult)) {
+    return Either.left(dagResult.left);
   }
 
   const hydratedCells = applyDagToCells({
     cells,
-    dependenciesByCell: dagResult.value.dependenciesByCell,
-    dependentsByCell: dagResult.value.dependentsByCell,
+    dependenciesByCell: dagResult.right.dependenciesByCell,
+    dependentsByCell: dagResult.right.dependentsByCell,
   });
 
   const validatedResult = validateCells(hydratedCells);
-  if (!validatedResult.ok) {
-    return validatedResult;
+  if (Either.isLeft(validatedResult)) {
+    return Either.left(validatedResult.left);
   }
 
-  return ok({
-    config: configResult.value,
+  return Either.right({
+    config: configResult.right,
     frontmatter,
-    cells: validatedResult.value,
+    cells: validatedResult.right,
   });
 };
 
-const decodeConfig = (frontmatter: string): Result<ParseMarkdownError, DriftConfig> => {
+const decodeConfig = (frontmatter: string): Either.Either<DriftConfig, ParseMarkdownError> => {
   const yamlResult = parseConfigYaml(frontmatter);
-  if (!yamlResult.ok) {
-    return yamlResult;
+  if (Either.isLeft(yamlResult)) {
+    return Either.left(yamlResult.left);
   }
 
-  const decoded = decodeDriftConfig(yamlResult.value);
+  const decoded = decodeDriftConfig(yamlResult.right);
   if (Either.isLeft(decoded)) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: null,
         message: formatDecodeError(decoded.left),
@@ -131,53 +136,53 @@ const decodeConfig = (frontmatter: string): Result<ParseMarkdownError, DriftConf
     );
   }
 
-  return ok(decoded.right);
+  return Either.right(decoded.right);
 };
 
 const parseCellChunk = (args: {
   readonly chunk: string;
   readonly index: number;
-}): Result<ParseMarkdownError, Cell> => {
+}): Either.Either<Cell, ParseMarkdownError> => {
   const extractedResult = extractArtifactBlocks(args.chunk, args.index);
-  if (!extractedResult.ok) {
-    return extractedResult;
+  if (Either.isLeft(extractedResult)) {
+    return Either.left(extractedResult.left);
   }
 
   const explicitDepsResult = parseExplicitDeps({
-    content: extractedResult.value.content,
+    content: extractedResult.right.content,
     cellIndex: args.index,
   });
-  if (!explicitDepsResult.ok) {
-    return explicitDepsResult;
+  if (Either.isLeft(explicitDepsResult)) {
+    return Either.left(explicitDepsResult.left);
   }
 
   const agentResult = parseAgent({
-    content: extractedResult.value.content,
+    content: extractedResult.right.content,
     cellIndex: args.index,
   });
-  if (!agentResult.ok) {
-    return agentResult;
+  if (Either.isLeft(agentResult)) {
+    return Either.left(agentResult.left);
   }
 
   const cellPayload: Cell = {
     index: args.index,
-    content: extractedResult.value.content,
-    explicitDeps: explicitDepsResult.value,
-    agent: agentResult.value,
-    imports: parseImports(extractedResult.value.content),
-    inlines: parseInlines(extractedResult.value.content),
+    content: extractedResult.right.content,
+    explicitDeps: explicitDepsResult.right,
+    agent: agentResult.right,
+    imports: parseImports(extractedResult.right.content),
+    inlines: parseInlines(extractedResult.right.content),
     version: 1,
     dependencies: [],
     dependents: [],
-    state: extractedResult.value.artifact === null ? "stale" : "clean",
-    comments: parseComments(extractedResult.value.content),
-    artifact: extractedResult.value.artifact,
+    state: extractedResult.right.artifact === null ? "stale" : "clean",
+    comments: parseComments(extractedResult.right.content),
+    artifact: extractedResult.right.artifact,
     lastInputHash: null,
   };
 
   const decodedCell = decodeCell(cellPayload);
   if (Either.isLeft(decodedCell)) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: args.index,
         message: formatDecodeError(decodedCell.left),
@@ -185,24 +190,24 @@ const parseCellChunk = (args: {
     );
   }
 
-  return ok(decodedCell.right);
+  return Either.right(decodedCell.right);
 };
 
 const extractArtifactBlocks = (
   chunk: string,
   cellIndex: number,
-): Result<
-  ParseMarkdownError,
+): Either.Either<
   {
     readonly content: string;
     readonly artifact: BuildArtifact | null;
-  }
+  },
+  ParseMarkdownError
 > => {
   const summaryMatch = chunk.match(SUMMARY_BLOCK_PATTERN);
   const diffMatch = chunk.match(DIFF_BLOCK_PATTERN);
 
   if ((summaryMatch === null) !== (diffMatch === null)) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex,
         message: "Cell artifact blocks must include both summary and diff sections.",
@@ -228,7 +233,7 @@ const extractArtifactBlocks = (
   const normalizedContent = content.trim();
 
   if (summaryMatch === null || diffMatch === null) {
-    return ok({
+    return Either.right({
       content: normalizedContent,
       artifact: null,
     });
@@ -246,7 +251,7 @@ const extractArtifactBlocks = (
   });
 
   if (Either.isLeft(decodedArtifact)) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex,
         message: formatDecodeError(decodedArtifact.left),
@@ -254,7 +259,7 @@ const extractArtifactBlocks = (
     );
   }
 
-  return ok({
+  return Either.right({
     content: normalizedContent,
     artifact: decodedArtifact.right,
   });
@@ -263,15 +268,15 @@ const extractArtifactBlocks = (
 const parseExplicitDeps = (args: {
   readonly content: string;
   readonly cellIndex: number;
-}): Result<ParseMarkdownError, ReadonlyArray<number> | null> => {
+}): Either.Either<ReadonlyArray<number> | null, ParseMarkdownError> => {
   const matched = args.content.match(DEPENDS_PATTERN);
   if (matched === null) {
-    return ok(null);
+    return Either.right(null);
   }
 
   const source = matched[1]?.trim() ?? "";
   if (source === "") {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: args.cellIndex,
         message: "Cell has an empty depends metadata declaration.",
@@ -287,7 +292,7 @@ const parseExplicitDeps = (args: {
     }
 
     if (!/^\d+$/u.test(part)) {
-      return err(
+      return Either.left(
         new ParseMarkdownError({
           cellIndex: args.cellIndex,
           message: `Cell has invalid dependency index '${part}'.`,
@@ -298,21 +303,21 @@ const parseExplicitDeps = (args: {
     dependencies.push(Number.parseInt(part, 10));
   }
 
-  return ok([...new Set(dependencies)].sort((left, right) => left - right));
+  return Either.right([...new Set(dependencies)].sort((left, right) => left - right));
 };
 
 const parseAgent = (args: {
   readonly content: string;
   readonly cellIndex: number;
-}): Result<ParseMarkdownError, AgentBackend | null> => {
+}): Either.Either<AgentBackend | null, ParseMarkdownError> => {
   const matched = args.content.match(AGENT_PATTERN);
   if (matched === null) {
-    return ok(null);
+    return Either.right(null);
   }
 
   const source = matched[1]?.trim() ?? "";
   if (source === "") {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: args.cellIndex,
         message: "Cell has an empty agent metadata declaration.",
@@ -322,7 +327,7 @@ const parseAgent = (args: {
 
   const decodedAgent = decodeAgentBackend(source);
   if (Either.isLeft(decodedAgent)) {
-    return err(
+    return Either.left(
       new ParseMarkdownError({
         cellIndex: args.cellIndex,
         message: `Cell has invalid agent '${source}'.`,
@@ -330,7 +335,7 @@ const parseAgent = (args: {
     );
   }
 
-  return ok(decodedAgent.right);
+  return Either.right(decodedAgent.right);
 };
 
 const parseComments = (content: string): ReadonlyArray<string> => {
@@ -355,13 +360,13 @@ const parseComments = (content: string): ReadonlyArray<string> => {
 
 const validateCells = (
   cells: ReadonlyArray<Cell>,
-): Result<ParseMarkdownError, ReadonlyArray<Cell>> => {
+): Either.Either<ReadonlyArray<Cell>, ParseMarkdownError> => {
   const validated: Cell[] = [];
 
   for (const cell of cells) {
     const decoded = decodeCell(cell);
     if (Either.isLeft(decoded)) {
-      return err(
+      return Either.left(
         new ParseMarkdownError({
           cellIndex: cell.index,
           message: formatDecodeError(decoded.left),
@@ -372,10 +377,12 @@ const validateCells = (
     validated.push(decoded.right);
   }
 
-  return ok(validated);
+  return Either.right(validated);
 };
 
-const parseConfigYaml = (source: string): Result<ParseMarkdownError, Record<string, unknown>> => {
+const parseConfigYaml = (
+  source: string,
+): Either.Either<Record<string, unknown>, ParseMarkdownError> => {
   const config: Record<string, unknown> = {};
   let currentSection: "vcs" | "execution" | null = null;
 
@@ -387,7 +394,7 @@ const parseConfigYaml = (source: string): Result<ParseMarkdownError, Record<stri
 
     const matched = trimmed.match(/^([A-Za-z][\w-]*):\s*(.*)$/u);
     if (matched === null) {
-      return err(
+      return Either.left(
         new ParseMarkdownError({
           cellIndex: null,
           message: `Invalid frontmatter line '${trimmed}'.`,
@@ -397,7 +404,7 @@ const parseConfigYaml = (source: string): Result<ParseMarkdownError, Record<stri
 
     const key = matched[1];
     if (key === undefined) {
-      return err(
+      return Either.left(
         new ParseMarkdownError({
           cellIndex: null,
           message: `Invalid frontmatter line '${trimmed}'.`,
@@ -422,7 +429,7 @@ const parseConfigYaml = (source: string): Result<ParseMarkdownError, Record<stri
     }
 
     if (currentSection === null) {
-      return err(
+      return Either.left(
         new ParseMarkdownError({
           cellIndex: null,
           message: `Unexpected indentation in line '${trimmed}'.`,
@@ -432,7 +439,7 @@ const parseConfigYaml = (source: string): Result<ParseMarkdownError, Record<stri
 
     const section = config[currentSection];
     if (typeof section !== "object" || section === null) {
-      return err(
+      return Either.left(
         new ParseMarkdownError({
           cellIndex: null,
           message: `Frontmatter section '${currentSection}' must be an object.`,
@@ -443,32 +450,7 @@ const parseConfigYaml = (source: string): Result<ParseMarkdownError, Record<stri
     Reflect.set(section, key, parseYamlScalar(valueSource));
   }
 
-  return ok(config);
-};
-
-const parseYamlScalar = (source: string): unknown => {
-  const trimmed = source.trim();
-
-  if (trimmed === "" || trimmed === "null") {
-    return null;
-  }
-
-  if (trimmed === "true") {
-    return true;
-  }
-
-  if (trimmed === "false") {
-    return false;
-  }
-
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-
-  return trimmed;
+  return Either.right(config);
 };
 
 const splitCellSegments = (content: string): ReadonlyArray<string> => {
@@ -500,14 +482,3 @@ const splitCellSegments = (content: string): ReadonlyArray<string> => {
 
   return segments;
 };
-
-const countLeadingSpaces = (line: string): number => {
-  const matched = line.match(/^\s*/u);
-  const prefix = matched?.[0] ?? "";
-  return prefix.length;
-};
-
-const formatDecodeError = (error: unknown): string =>
-  typeof error === "string" ? error : JSON.stringify(error, null, 2);
-
-const normalizeNewlines = (value: string): string => value.replaceAll("\r\n", "\n");

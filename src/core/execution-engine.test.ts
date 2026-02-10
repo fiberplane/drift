@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import { Either } from "effect";
+
 import {
-  err,
-  ok,
   runAllStaleBuild,
   runOneCellBuild,
   type BuildCallbacks,
@@ -25,12 +25,12 @@ const createCell = (args: {
 
 const createAlwaysSuccessfulCallbacks = (): BuildCallbacks => ({
   runBuild: ({ cell }) =>
-    ok({
+    Either.right({
       files: [`src/${cell.index}.ts`],
       patch: `patch-${cell.index}`,
       timestamp: "2026-02-10T00:00:00Z",
     }),
-  reviewBuild: ({ cell }) => ok(`summary-${cell.index}`),
+  reviewBuild: ({ cell }) => Either.right(`summary-${cell.index}`),
 });
 
 describe("execution-engine", () => {
@@ -39,13 +39,13 @@ describe("execution-engine", () => {
     const callbacks: BuildCallbacks = {
       runBuild: ({ cell }) => {
         calls.push(cell.index);
-        return ok({
+        return Either.right({
           files: [`src/${cell.index}.ts`],
           patch: `patch-${cell.index}`,
           timestamp: "2026-02-10T00:00:00Z",
         });
       },
-      reviewBuild: ({ cell }) => ok(`summary-${cell.index}`),
+      reviewBuild: ({ cell }) => Either.right(`summary-${cell.index}`),
     };
 
     const result = runOneCellBuild({
@@ -61,16 +61,16 @@ describe("execution-engine", () => {
       callbacks,
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isLeft(result)) {
       return;
     }
 
     expect(calls).toEqual([1, 2, 3, 4]);
-    expect(result.value.executed).toEqual([1, 2, 3, 4]);
-    expect(result.value.eligibleDescendants).toEqual([5]);
+    expect(result.right.executed).toEqual([1, 2, 3, 4]);
+    expect(result.right.eligibleDescendants).toEqual([5]);
 
-    const cellStates = result.value.cells.map((cell) => ({
+    const cellStates = result.right.cells.map((cell) => ({
       index: cell.index,
       state: cell.state,
     }));
@@ -97,13 +97,13 @@ describe("execution-engine", () => {
       callbacks: createAlwaysSuccessfulCallbacks(),
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isLeft(result)) {
       return;
     }
 
-    expect(result.value.executed).toEqual([1, 2, 3, 4, 5]);
-    expect(result.value.eligibleDescendants).toEqual([]);
+    expect(result.right.executed).toEqual([1, 2, 3, 4, 5]);
+    expect(result.right.eligibleDescendants).toEqual([]);
   });
 
   test("parallel mode retries diff-apply failures sequentially", () => {
@@ -113,20 +113,20 @@ describe("execution-engine", () => {
         attempts.push(`${cell.index}:${attempt}`);
 
         if (cell.index === 3 && attempt === "parallel") {
-          return err({
+          return Either.left({
             tag: "diff-apply",
             cellIndex: 3,
             message: "conflict",
           });
         }
 
-        return ok({
+        return Either.right({
           files: [`src/${cell.index}.ts`],
           patch: `patch-${cell.index}`,
           timestamp: "2026-02-10T00:00:00Z",
         });
       },
-      reviewBuild: ({ cell }) => ok(`summary-${cell.index}`),
+      reviewBuild: ({ cell }) => Either.right(`summary-${cell.index}`),
     };
 
     const result = runOneCellBuild({
@@ -142,13 +142,13 @@ describe("execution-engine", () => {
       config: { parallel: true },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isLeft(result)) {
       return;
     }
 
-    expect(result.value.retried).toEqual([3]);
-    expect(result.value.executed).toEqual([1, 2, 3, 4]);
+    expect(result.right.retried).toEqual([3]);
+    expect(result.right.executed).toEqual([1, 2, 3, 4]);
     expect(attempts).toEqual([
       "1:parallel",
       "2:parallel",
@@ -166,20 +166,20 @@ describe("execution-engine", () => {
         attempts.push({ cellIndex: cell.index, attempt });
 
         if (cell.index === 2) {
-          return err({
+          return Either.left({
             tag: "agent-error",
             cellIndex: 2,
             message: "agent crashed",
           });
         }
 
-        return ok({
+        return Either.right({
           files: [`src/${cell.index}.ts`],
           patch: `patch-${cell.index}`,
           timestamp: "2026-02-10T00:00:00Z",
         });
       },
-      reviewBuild: ({ cell }) => ok(`summary-${cell.index}`),
+      reviewBuild: ({ cell }) => Either.right(`summary-${cell.index}`),
     };
 
     const result = runOneCellBuild({
@@ -194,18 +194,18 @@ describe("execution-engine", () => {
       callbacks,
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isRight(result)) {
       return;
     }
 
-    expect(result.error.tag).toBe("ancestor-failed");
-    if (result.error.tag !== "ancestor-failed") {
+    expect(result.left.tag).toBe("ancestor-failed");
+    if (result.left.tag !== "ancestor-failed") {
       return;
     }
 
-    expect(result.error.failedCell).toBe(2);
-    expect(result.error.targetCell).toBe(4);
+    expect(result.left.failedCell).toBe(2);
+    expect(result.left.targetCell).toBe(4);
     expect(attempts).toEqual([
       { cellIndex: 1, attempt: "sequential" },
       { cellIndex: 2, attempt: "sequential" },

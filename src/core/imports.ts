@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
 
-import { err, ok, type Result } from "./execution-engine.ts";
+import { Either } from "effect";
+
 import { ImportNotFoundError } from "./errors.ts";
 import type { Import } from "./schemas.ts";
 
@@ -47,7 +48,7 @@ export const parseImports = (content: string): ReadonlyArray<Import> => {
 
 export const resolveImportsInContent = (
   args: ResolveImportsArgs,
-): Result<ImportNotFoundError, string> => {
+): Either.Either<string, ImportNotFoundError> => {
   const lines = normalizeNewlines(args.content).split("\n");
   const resolvedLines: string[] = [];
 
@@ -69,24 +70,24 @@ export const resolveImportsInContent = (
       cellIndex: args.cellIndex,
       projectRoot: args.projectRoot,
     });
-    if (!resolvedLine.ok) {
+    if (Either.isLeft(resolvedLine)) {
       return resolvedLine;
     }
 
-    resolvedLines.push(resolvedLine.value);
+    resolvedLines.push(resolvedLine.right);
   }
 
-  return ok(resolvedLines.join("\n"));
+  return Either.right(resolvedLines.join("\n"));
 };
 
 const resolveImportsInLine = (args: {
   readonly line: string;
   readonly cellIndex: number;
   readonly projectRoot: string;
-}): Result<ImportNotFoundError, string> => {
+}): Either.Either<string, ImportNotFoundError> => {
   const matches = [...args.line.matchAll(IMPORT_REFERENCE_PATTERN)];
   if (matches.length === 0) {
-    return ok(args.line);
+    return Either.right(args.line);
   }
 
   let resolved = "";
@@ -110,34 +111,34 @@ const resolveImportsInLine = (args: {
       projectRoot: args.projectRoot,
       importRef: parsedImport,
     });
-    if (!referenceResult.ok) {
-      return referenceResult;
+    if (Either.isLeft(referenceResult)) {
+      return Either.left(referenceResult.left);
     }
 
-    const renderedBlocks = referenceResult.value.map(renderResolvedImport).join("\n\n");
+    const renderedBlocks = referenceResult.right.map(renderResolvedImport).join("\n\n");
     resolved += `${prefix}${renderedBlocks}`;
 
     cursor = start + rawMatch.length;
   }
 
   resolved += args.line.slice(cursor);
-  return ok(resolved);
+  return Either.right(resolved);
 };
 
 const resolveImportReference = (
   args: ResolveImportReferenceArgs,
-): Result<ImportNotFoundError, ReadonlyArray<ResolvedImport>> => {
+): Either.Either<ReadonlyArray<ResolvedImport>, ImportNotFoundError> => {
   const pathsResult = resolveImportPaths(args);
-  if (!pathsResult.ok) {
-    return pathsResult;
+  if (Either.isLeft(pathsResult)) {
+    return Either.left(pathsResult.left);
   }
 
   const resolved: ResolvedImport[] = [];
 
-  for (const relativePath of pathsResult.value) {
+  for (const relativePath of pathsResult.right) {
     const absolutePath = toAbsolutePath(args.projectRoot, relativePath);
     if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
-      return err(
+      return Either.left(
         new ImportNotFoundError({
           cellIndex: args.cellIndex,
           importRef: args.importRef.raw,
@@ -151,24 +152,24 @@ const resolveImportReference = (
       importRef: args.importRef,
       source,
     });
-    if (!contentResult.ok) {
-      return contentResult;
+    if (Either.isLeft(contentResult)) {
+      return Either.left(contentResult.left);
     }
 
     resolved.push({
       path: normalizeDisplayPath(relativePath),
-      content: contentResult.value,
+      content: contentResult.right,
     });
   }
 
-  return ok(resolved.sort((left, right) => left.path.localeCompare(right.path)));
+  return Either.right(resolved.sort((left, right) => left.path.localeCompare(right.path)));
 };
 
 const resolveImportPaths = (
   args: ResolveImportReferenceArgs,
-): Result<ImportNotFoundError, ReadonlyArray<string>> => {
+): Either.Either<ReadonlyArray<string>, ImportNotFoundError> => {
   if (args.importRef.kind !== "glob") {
-    return ok([normalizeDisplayPath(args.importRef.path)]);
+    return Either.right([normalizeDisplayPath(args.importRef.path)]);
   }
 
   const matches = [
@@ -178,7 +179,7 @@ const resolveImportPaths = (
     .sort((left, right) => left.localeCompare(right));
 
   if (matches.length === 0) {
-    return err(
+    return Either.left(
       new ImportNotFoundError({
         cellIndex: args.cellIndex,
         importRef: args.importRef.raw,
@@ -186,27 +187,27 @@ const resolveImportPaths = (
     );
   }
 
-  return ok(matches);
+  return Either.right(matches);
 };
 
 const extractImportedContent = (args: {
   readonly cellIndex: number;
   readonly importRef: Import;
   readonly source: string;
-}): Result<ImportNotFoundError, string> => {
+}): Either.Either<string, ImportNotFoundError> => {
   switch (args.importRef.kind) {
     case "file":
     case "glob":
-      return ok(args.source.trimEnd());
+      return Either.right(args.source.trimEnd());
     case "range": {
       const range = args.importRef.range;
       if (range === undefined) {
-        return ok(args.source.trimEnd());
+        return Either.right(args.source.trimEnd());
       }
 
       const selectedLines = pickLineRange(args.source, range);
       if (selectedLines === null) {
-        return err(
+        return Either.left(
           new ImportNotFoundError({
             cellIndex: args.cellIndex,
             importRef: args.importRef.raw,
@@ -214,12 +215,12 @@ const extractImportedContent = (args: {
         );
       }
 
-      return ok(selectedLines);
+      return Either.right(selectedLines);
     }
     case "symbol": {
       const symbol = args.importRef.symbol;
       if (symbol === undefined) {
-        return err(
+        return Either.left(
           new ImportNotFoundError({
             cellIndex: args.cellIndex,
             importRef: args.importRef.raw,
@@ -229,7 +230,7 @@ const extractImportedContent = (args: {
 
       const symbolBlock = extractExportedSymbol(args.source, symbol);
       if (symbolBlock === null) {
-        return err(
+        return Either.left(
           new ImportNotFoundError({
             cellIndex: args.cellIndex,
             importRef: args.importRef.raw,
@@ -237,7 +238,7 @@ const extractImportedContent = (args: {
         );
       }
 
-      return ok(symbolBlock);
+      return Either.right(symbolBlock);
     }
   }
 };

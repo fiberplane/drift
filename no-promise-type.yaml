@@ -1,8 +1,0 @@
-id: no-promise-type
-language: typescript
-message: Use Effect.Effect<A, E, R> instead of Promise<T>
-severity: warning
-rule:
-  any:
-    - pattern: Promise<$TYPE>
-    - pattern: Promise

@@ -1,5 +1,7 @@
 import { join } from "node:path";
 
+import { Either } from "effect";
+
 import { initializeProjectFromMarkdown, type ProjectError } from "./project-store.ts";
 import type { CliContext } from "./types.ts";
 
@@ -17,13 +19,13 @@ export const runInitCommand = (args: readonly string[], context: CliContext): nu
     nowIso: context.now().toISOString(),
   });
 
-  if (!result.ok) {
-    printProjectError(context, result.error);
+  if (Either.isLeft(result)) {
+    printProjectError(context, result.left);
     return 1;
   }
 
   context.writeLine(`✓ Initialized .drift from ${markdownFile}`);
-  context.writeLine(`  └─ Created ${result.value.cells} cell directories`);
+  context.writeLine(`  └─ Created ${result.right.cells} cell directories`);
 
   return 0;
 };

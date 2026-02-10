@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { Either } from "effect";
+
 import { loadProjectFromDisk } from "./loader.ts";
 
 const createTempDirectory = (): string => mkdtempSync(join(tmpdir(), "drift-loader-"));
@@ -69,17 +71,17 @@ describe("loader", () => {
 
     const result = loadProjectFromDisk(root);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isLeft(result)) {
       rmSync(root, { recursive: true, force: true });
       return;
     }
 
-    expect(result.value.config.vcs.backend).toBe("jj");
-    expect(result.value.cells).toHaveLength(2);
+    expect(result.right.config.vcs.backend).toBe("jj");
+    expect(result.right.cells).toHaveLength(2);
 
-    const cellZero = result.value.cells[0];
-    const cellOne = result.value.cells[1];
+    const cellZero = result.right.cells[0];
+    const cellOne = result.right.cells[1];
 
     expect(cellZero?.index).toBe(0);
     expect(cellZero?.dependencies).toEqual([]);
@@ -112,14 +114,14 @@ describe("loader", () => {
 
     const result = loadProjectFromDisk(root);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isRight(result)) {
       rmSync(root, { recursive: true, force: true });
       return;
     }
 
-    expect(result.error._tag).toBe("LoadProjectError");
-    expect(result.error.message).toContain("invalid dependency index");
+    expect(result.left._tag).toBe("LoadProjectError");
+    expect(result.left.message).toContain("invalid dependency index");
 
     rmSync(root, { recursive: true, force: true });
   });
@@ -134,15 +136,15 @@ describe("loader", () => {
 
     const result = loadProjectFromDisk(root);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isRight(result)) {
       rmSync(root, { recursive: true, force: true });
       return;
     }
 
-    expect(result.error._tag).toBe("DagCycleError");
-    if (result.error._tag === "DagCycleError") {
-      expect(result.error.cells).toEqual([1, 2]);
+    expect(result.left._tag).toBe("DagCycleError");
+    if (result.left._tag === "DagCycleError") {
+      expect(result.left.cells).toEqual([1, 2]);
     }
 
     rmSync(root, { recursive: true, force: true });

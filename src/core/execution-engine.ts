@@ -1,3 +1,5 @@
+import { Either } from "effect";
+
 export type CellState = "clean" | "stale" | "running" | "error";
 
 export interface BuildArtifact {
@@ -35,11 +37,11 @@ export interface BuildCallbacks {
   readonly runBuild: (args: {
     readonly cell: ExecutionCell;
     readonly attempt: ExecutionAttempt;
-  }) => Result<CellExecutionError, BuildOutput>;
+  }) => Either.Either<BuildOutput, CellExecutionError>;
   readonly reviewBuild: (args: {
     readonly cell: ExecutionCell;
     readonly patch: string;
-  }) => Result<CellExecutionError, string>;
+  }) => Either.Either<string, CellExecutionError>;
 }
 
 export interface BuildExecutionConfig {
@@ -73,20 +75,6 @@ export type EngineError =
       readonly cause: CellExecutionError;
     };
 
-export type Result<E, A> =
-  | {
-      readonly ok: true;
-      readonly value: A;
-    }
-  | {
-      readonly ok: false;
-      readonly error: E;
-    };
-
-export const ok = <A>(value: A): Result<never, A> => ({ ok: true, value });
-
-export const err = <E>(error: E): Result<E, never> => ({ ok: false, error });
-
 type MutableExecutionCell = {
   index: number;
   dependencies: number[];
@@ -108,105 +96,105 @@ export const runOneCellBuild = (args: {
   readonly targetCell: number;
   readonly callbacks: BuildCallbacks;
   readonly config?: BuildExecutionConfig;
-}): Result<EngineError, BuildExecutionReport> => {
+}): Either.Either<BuildExecutionReport, EngineError> => {
   const contextResult = createExecutionContext({
     cells: args.cells,
     callbacks: args.callbacks,
     config: args.config,
   });
-  if (!contextResult.ok) {
-    return contextResult;
+  if (Either.isLeft(contextResult)) {
+    return Either.left(contextResult.left);
   }
 
-  const context = contextResult.value;
+  const context = contextResult.right;
   const targetCell = context.cells.get(args.targetCell);
   if (targetCell === undefined) {
-    return err({ tag: "missing-cell", cellIndex: args.targetCell });
+    return Either.left({ tag: "missing-cell", cellIndex: args.targetCell });
   }
 
   const staleAncestorsResult = collectStaleAncestors(context.cells, args.targetCell);
-  if (!staleAncestorsResult.ok) {
-    return staleAncestorsResult;
+  if (Either.isLeft(staleAncestorsResult)) {
+    return Either.left(staleAncestorsResult.left);
   }
 
-  const ancestorLevelsResult = buildTopologicalLevels(context.cells, staleAncestorsResult.value);
-  if (!ancestorLevelsResult.ok) {
-    return ancestorLevelsResult;
+  const ancestorLevelsResult = buildTopologicalLevels(context.cells, staleAncestorsResult.right);
+  if (Either.isLeft(ancestorLevelsResult)) {
+    return Either.left(ancestorLevelsResult.left);
   }
 
-  const ancestorExecutionResult = executeLevels(context, ancestorLevelsResult.value);
-  if (!ancestorExecutionResult.ok) {
-    if (ancestorExecutionResult.error.tag === "cell-error") {
+  const ancestorExecutionResult = executeLevels(context, ancestorLevelsResult.right);
+  if (Either.isLeft(ancestorExecutionResult)) {
+    if (ancestorExecutionResult.left.tag === "cell-error") {
       const target = context.cells.get(args.targetCell);
       if (target !== undefined && target.state !== "error") {
         target.state = "stale";
       }
-      return err({
+      return Either.left({
         tag: "ancestor-failed",
         targetCell: args.targetCell,
-        failedCell: ancestorExecutionResult.error.error.cellIndex,
-        cause: ancestorExecutionResult.error.error,
+        failedCell: ancestorExecutionResult.left.error.cellIndex,
+        cause: ancestorExecutionResult.left.error,
       });
     }
-    return ancestorExecutionResult;
+    return Either.left(ancestorExecutionResult.left);
   }
 
   const targetExecutionResult = executeCell(context, args.targetCell, "sequential");
-  if (!targetExecutionResult.ok) {
-    return err({ tag: "cell-error", error: targetExecutionResult.error });
+  if (Either.isLeft(targetExecutionResult)) {
+    return Either.left({ tag: "cell-error", error: targetExecutionResult.left });
   }
 
-  return ok(buildExecutionReport(context));
+  return Either.right(buildExecutionReport(context));
 };
 
 export const runAllStaleBuild = (args: {
   readonly cells: readonly ExecutionCell[];
   readonly callbacks: BuildCallbacks;
   readonly config?: BuildExecutionConfig;
-}): Result<EngineError, BuildExecutionReport> => {
+}): Either.Either<BuildExecutionReport, EngineError> => {
   const contextResult = createExecutionContext({
     cells: args.cells,
     callbacks: args.callbacks,
     config: args.config,
   });
-  if (!contextResult.ok) {
-    return contextResult;
+  if (Either.isLeft(contextResult)) {
+    return Either.left(contextResult.left);
   }
 
-  const context = contextResult.value;
+  const context = contextResult.right;
   const staleCells = [...context.cells.values()]
     .filter((cell) => cell.state === "stale")
     .map((cell) => cell.index);
 
   const levelsResult = buildTopologicalLevels(context.cells, staleCells);
-  if (!levelsResult.ok) {
-    return levelsResult;
+  if (Either.isLeft(levelsResult)) {
+    return Either.left(levelsResult.left);
   }
 
-  const executionResult = executeLevels(context, levelsResult.value);
-  if (!executionResult.ok) {
-    return executionResult;
+  const executionResult = executeLevels(context, levelsResult.right);
+  if (Either.isLeft(executionResult)) {
+    return Either.left(executionResult.left);
   }
 
-  return ok(buildExecutionReport(context));
+  return Either.right(buildExecutionReport(context));
 };
 
 const createExecutionContext = (args: {
   readonly cells: readonly ExecutionCell[];
   readonly callbacks: BuildCallbacks;
   readonly config?: BuildExecutionConfig;
-}): Result<EngineError, ExecutionContext> => {
+}): Either.Either<ExecutionContext, EngineError> => {
   const map = new Map<number, MutableExecutionCell>();
   for (const cell of args.cells) {
     map.set(cell.index, cloneCell(cell));
   }
 
   const dependencyValidation = validateDependencies(map);
-  if (!dependencyValidation.ok) {
-    return dependencyValidation;
+  if (Either.isLeft(dependencyValidation)) {
+    return Either.left(dependencyValidation.left);
   }
 
-  return ok({
+  return Either.right({
     cells: map,
     callbacks: args.callbacks,
     config: {
@@ -227,11 +215,11 @@ const cloneCell = (cell: ExecutionCell): MutableExecutionCell => ({
 
 const validateDependencies = (
   cells: ReadonlyMap<number, MutableExecutionCell>,
-): Result<EngineError, void> => {
+): Either.Either<void, EngineError> => {
   for (const cell of cells.values()) {
     for (const dependency of cell.dependencies) {
       if (!cells.has(dependency)) {
-        return err({
+        return Either.left({
           tag: "missing-cell",
           cellIndex: dependency,
         });
@@ -239,16 +227,16 @@ const validateDependencies = (
     }
   }
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 const collectStaleAncestors = (
   cells: ReadonlyMap<number, MutableExecutionCell>,
   targetCellIndex: number,
-): Result<EngineError, readonly number[]> => {
+): Either.Either<readonly number[], EngineError> => {
   const targetCell = cells.get(targetCellIndex);
   if (targetCell === undefined) {
-    return err({ tag: "missing-cell", cellIndex: targetCellIndex });
+    return Either.left({ tag: "missing-cell", cellIndex: targetCellIndex });
   }
 
   const staleAncestors = new Set<number>();
@@ -265,7 +253,7 @@ const collectStaleAncestors = (
 
     const currentCell = cells.get(currentIndex);
     if (currentCell === undefined) {
-      return err({ tag: "missing-cell", cellIndex: currentIndex });
+      return Either.left({ tag: "missing-cell", cellIndex: currentIndex });
     }
 
     if (currentCell.state === "stale") {
@@ -277,16 +265,16 @@ const collectStaleAncestors = (
     }
   }
 
-  return ok([...staleAncestors]);
+  return Either.right([...staleAncestors]);
 };
 
 const buildTopologicalLevels = (
   cells: ReadonlyMap<number, MutableExecutionCell>,
   cellIndexes: readonly number[],
-): Result<EngineError, readonly (readonly number[])[]> => {
+): Either.Either<readonly (readonly number[])[], EngineError> => {
   const nodes = new Set<number>(cellIndexes);
   if (nodes.size === 0) {
-    return ok([]);
+    return Either.right([]);
   }
 
   const indegree = new Map<number, number>();
@@ -294,7 +282,7 @@ const buildTopologicalLevels = (
 
   for (const index of nodes) {
     if (!cells.has(index)) {
-      return err({ tag: "missing-cell", cellIndex: index });
+      return Either.left({ tag: "missing-cell", cellIndex: index });
     }
     indegree.set(index, 0);
   }
@@ -302,7 +290,7 @@ const buildTopologicalLevels = (
   for (const index of nodes) {
     const cell = cells.get(index);
     if (cell === undefined) {
-      return err({ tag: "missing-cell", cellIndex: index });
+      return Either.left({ tag: "missing-cell", cellIndex: index });
     }
 
     for (const dependency of cell.dependencies) {
@@ -312,7 +300,7 @@ const buildTopologicalLevels = (
 
       const currentIndegree = indegree.get(index);
       if (currentIndegree === undefined) {
-        return err({ tag: "missing-cell", cellIndex: index });
+        return Either.left({ tag: "missing-cell", cellIndex: index });
       }
       indegree.set(index, currentIndegree + 1);
 
@@ -338,7 +326,7 @@ const buildTopologicalLevels = (
       for (const dependent of dependents) {
         const currentIndegree = indegree.get(dependent);
         if (currentIndegree === undefined) {
-          return err({ tag: "missing-cell", cellIndex: dependent });
+          return Either.left({ tag: "missing-cell", cellIndex: dependent });
         }
 
         const nextIndegree = currentIndegree - 1;
@@ -357,56 +345,56 @@ const buildTopologicalLevels = (
       .filter((index) => (indegree.get(index) ?? 0) > 0)
       .sort((left, right) => left - right);
 
-    return err({ tag: "cycle-detected", cells: cycleCells });
+    return Either.left({ tag: "cycle-detected", cells: cycleCells });
   }
 
-  return ok(levels);
+  return Either.right(levels);
 };
 
 const executeLevels = (
   context: ExecutionContext,
   levels: readonly (readonly number[])[],
-): Result<EngineError, void> => {
+): Either.Either<void, EngineError> => {
   for (const level of levels) {
     const executionResult = context.config.parallel
       ? executeParallelLevel(context, level)
       : executeSequentialLevel(context, level);
 
-    if (!executionResult.ok) {
+    if (Either.isLeft(executionResult)) {
       return executionResult;
     }
   }
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 const executeSequentialLevel = (
   context: ExecutionContext,
   level: readonly number[],
-): Result<EngineError, void> => {
+): Either.Either<void, EngineError> => {
   for (const cellIndex of level) {
     const result = executeCell(context, cellIndex, "sequential");
-    if (!result.ok) {
-      return err({ tag: "cell-error", error: result.error });
+    if (Either.isLeft(result)) {
+      return Either.left({ tag: "cell-error", error: result.left });
     }
   }
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 const executeParallelLevel = (
   context: ExecutionContext,
   level: readonly number[],
-): Result<EngineError, void> => {
+): Either.Either<void, EngineError> => {
   const retryQueue: number[] = [];
 
   for (const cellIndex of level) {
     const result = executeCell(context, cellIndex, "parallel");
-    if (result.ok) {
+    if (Either.isRight(result)) {
       continue;
     }
 
-    if (result.error.tag === "diff-apply") {
+    if (result.left.tag === "diff-apply") {
       const cell = context.cells.get(cellIndex);
       if (cell !== undefined) {
         cell.state = "stale";
@@ -415,28 +403,28 @@ const executeParallelLevel = (
       continue;
     }
 
-    return err({ tag: "cell-error", error: result.error });
+    return Either.left({ tag: "cell-error", error: result.left });
   }
 
   for (const cellIndex of retryQueue) {
     context.retried.push(cellIndex);
     const result = executeCell(context, cellIndex, "sequential-retry");
-    if (!result.ok) {
-      return err({ tag: "cell-error", error: result.error });
+    if (Either.isLeft(result)) {
+      return Either.left({ tag: "cell-error", error: result.left });
     }
   }
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 const executeCell = (
   context: ExecutionContext,
   cellIndex: number,
   attempt: ExecutionAttempt,
-): Result<CellExecutionError, void> => {
+): Either.Either<void, CellExecutionError> => {
   const cell = context.cells.get(cellIndex);
   if (cell === undefined) {
-    return err({
+    return Either.left({
       tag: "agent-error",
       cellIndex,
       message: `Missing cell ${cellIndex}.`,
@@ -448,30 +436,30 @@ const executeCell = (
     cell: toReadonlyCell(cell),
     attempt,
   });
-  if (!buildResult.ok) {
+  if (Either.isLeft(buildResult)) {
     cell.state = "error";
     return buildResult;
   }
 
   const reviewResult = context.callbacks.reviewBuild({
     cell: toReadonlyCell(cell),
-    patch: buildResult.value.patch,
+    patch: buildResult.right.patch,
   });
-  if (!reviewResult.ok) {
+  if (Either.isLeft(reviewResult)) {
     cell.state = "error";
     return reviewResult;
   }
 
   cell.artifact = {
-    files: buildResult.value.files,
-    patch: buildResult.value.patch,
-    summary: reviewResult.value,
-    timestamp: buildResult.value.timestamp,
+    files: buildResult.right.files,
+    patch: buildResult.right.patch,
+    summary: reviewResult.right,
+    timestamp: buildResult.right.timestamp,
   };
   cell.state = "clean";
   context.executed.push(cellIndex);
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 const toReadonlyCell = (cell: MutableExecutionCell): ExecutionCell => ({

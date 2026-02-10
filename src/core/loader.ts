@@ -4,10 +4,15 @@ import { join } from "node:path";
 import { Either } from "effect";
 
 import { applyDagToCells, buildDagGraph } from "./dag.ts";
-import { err, ok, type Result } from "./execution-engine.ts";
 import { DagCycleError, LoadProjectError } from "./errors.ts";
 import { parseImports } from "./imports.ts";
 import { parseInlines } from "./inlines.ts";
+import {
+  countLeadingSpaces,
+  formatDecodeError,
+  normalizeNewlines,
+  parseYamlScalar,
+} from "./parsing-utils.ts";
 import { resolveDependencies } from "./resolver.ts";
 import {
   decodeAgentBackend,
@@ -37,18 +42,18 @@ export const createEmptyProject = (config: DriftConfig): LoadedProject => ({
   cells: [],
 });
 
-export const loadProjectFromDisk = (rootDir: string): Result<LoaderError, LoadedProject> => {
+export const loadProjectFromDisk = (rootDir: string): Either.Either<LoadedProject, LoaderError> => {
   const driftDir = join(rootDir, ".drift");
   const configPath = join(driftDir, "config.yaml");
   const cellsPath = join(driftDir, "cells");
 
   const configResult = loadConfig(configPath);
-  if (!configResult.ok) {
-    return configResult;
+  if (Either.isLeft(configResult)) {
+    return Either.left(configResult.left);
   }
 
   if (!existsSync(cellsPath)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: cellsPath,
         message: "Missing cells directory.",
@@ -57,49 +62,49 @@ export const loadProjectFromDisk = (rootDir: string): Result<LoaderError, Loaded
   }
 
   const indexesResult = discoverCellIndexes(cellsPath);
-  if (!indexesResult.ok) {
-    return indexesResult;
+  if (Either.isLeft(indexesResult)) {
+    return Either.left(indexesResult.left);
   }
 
   const cells: Cell[] = [];
-  for (const index of indexesResult.value) {
+  for (const index of indexesResult.right) {
     const cellResult = loadCell({
       cellIndex: index,
       cellsPath,
     });
-    if (!cellResult.ok) {
-      return cellResult;
+    if (Either.isLeft(cellResult)) {
+      return Either.left(cellResult.left);
     }
 
-    cells.push(cellResult.value);
+    cells.push(cellResult.right);
   }
 
-  const dependencyMap = resolveDependencies(configResult.value.resolver, cells);
+  const dependencyMap = resolveDependencies(configResult.right.resolver, cells);
   const dagResult = buildDagGraph(dependencyMap);
-  if (!dagResult.ok) {
-    return err(dagResult.error);
+  if (Either.isLeft(dagResult)) {
+    return Either.left(dagResult.left);
   }
 
   const hydratedCells = applyDagToCells({
     cells,
-    dependenciesByCell: dagResult.value.dependenciesByCell,
-    dependentsByCell: dagResult.value.dependentsByCell,
+    dependenciesByCell: dagResult.right.dependenciesByCell,
+    dependentsByCell: dagResult.right.dependentsByCell,
   });
 
   const validatedCellsResult = validateCells(hydratedCells, cellsPath);
-  if (!validatedCellsResult.ok) {
-    return validatedCellsResult;
+  if (Either.isLeft(validatedCellsResult)) {
+    return Either.left(validatedCellsResult.left);
   }
 
-  return ok({
-    config: configResult.value,
-    cells: validatedCellsResult.value,
+  return Either.right({
+    config: configResult.right,
+    cells: validatedCellsResult.right,
   });
 };
 
-const loadConfig = (configPath: string): Result<LoadProjectError, DriftConfig> => {
+const loadConfig = (configPath: string): Either.Either<DriftConfig, LoadProjectError> => {
   if (!existsSync(configPath)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: configPath,
         message: "Missing Drift config file.",
@@ -112,13 +117,13 @@ const loadConfig = (configPath: string): Result<LoadProjectError, DriftConfig> =
     source,
     path: configPath,
   });
-  if (!parsedResult.ok) {
-    return parsedResult;
+  if (Either.isLeft(parsedResult)) {
+    return Either.left(parsedResult.left);
   }
 
-  const decoded = decodeDriftConfig(parsedResult.value);
+  const decoded = decodeDriftConfig(parsedResult.right);
   if (Either.isLeft(decoded)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: configPath,
         message: formatDecodeError(decoded.left),
@@ -126,19 +131,19 @@ const loadConfig = (configPath: string): Result<LoadProjectError, DriftConfig> =
     );
   }
 
-  return ok(decoded.right);
+  return Either.right(decoded.right);
 };
 
 const discoverCellIndexes = (
   cellsPath: string,
-): Result<LoadProjectError, ReadonlyArray<number>> => {
+): Either.Either<ReadonlyArray<number>, LoadProjectError> => {
   const indexes = readdirSync(cellsPath, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => parseCellIndex(entry.name))
     .filter((index): index is number => index !== null)
     .sort((left, right) => left - right);
 
-  return ok(indexes);
+  return Either.right(indexes);
 };
 
 const parseCellIndex = (value: string): number | null => {
@@ -152,19 +157,19 @@ const parseCellIndex = (value: string): number | null => {
 const loadCell = (args: {
   readonly cellIndex: number;
   readonly cellsPath: string;
-}): Result<LoadProjectError, Cell> => {
+}): Either.Either<Cell, LoadProjectError> => {
   const cellPath = join(args.cellsPath, String(args.cellIndex));
   const versionsResult = discoverVersions({
     cellPath,
     cellIndex: args.cellIndex,
   });
-  if (!versionsResult.ok) {
-    return versionsResult;
+  if (Either.isLeft(versionsResult)) {
+    return Either.left(versionsResult.left);
   }
 
-  const latestVersion = versionsResult.value[versionsResult.value.length - 1];
+  const latestVersion = versionsResult.right[versionsResult.right.length - 1];
   if (latestVersion === undefined) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: cellPath,
         message: "Cell has no version files.",
@@ -180,8 +185,8 @@ const loadCell = (args: {
     cellIndex: args.cellIndex,
     path: versionPath,
   });
-  if (!explicitDepsResult.ok) {
-    return explicitDepsResult;
+  if (Either.isLeft(explicitDepsResult)) {
+    return Either.left(explicitDepsResult.left);
   }
 
   const agentResult = parseCellAgent({
@@ -189,33 +194,33 @@ const loadCell = (args: {
     cellIndex: args.cellIndex,
     path: versionPath,
   });
-  if (!agentResult.ok) {
-    return agentResult;
+  if (Either.isLeft(agentResult)) {
+    return Either.left(agentResult.left);
   }
 
   const artifactResult = loadArtifact({
     cellPath,
     cellIndex: args.cellIndex,
   });
-  if (!artifactResult.ok) {
-    return artifactResult;
+  if (Either.isLeft(artifactResult)) {
+    return Either.left(artifactResult.left);
   }
 
   const cellResult = createValidatedCell({
     cellIndex: args.cellIndex,
     content,
-    version: versionsResult.value.length,
-    explicitDeps: explicitDepsResult.value,
-    agent: agentResult.value,
-    artifact: artifactResult.value,
+    version: versionsResult.right.length,
+    explicitDeps: explicitDepsResult.right,
+    agent: agentResult.right,
+    artifact: artifactResult.right,
     state: determineCellState({
-      artifact: artifactResult.value,
+      artifact: artifactResult.right,
       versionPath,
     }),
     path: versionPath,
   });
-  if (!cellResult.ok) {
-    return cellResult;
+  if (Either.isLeft(cellResult)) {
+    return Either.left(cellResult.left);
   }
 
   return cellResult;
@@ -224,9 +229,9 @@ const loadCell = (args: {
 const discoverVersions = (args: {
   readonly cellPath: string;
   readonly cellIndex: number;
-}): Result<
-  LoadProjectError,
-  ReadonlyArray<{ readonly fileName: string; readonly value: number }>
+}): Either.Either<
+  ReadonlyArray<{ readonly fileName: string; readonly value: number }>,
+  LoadProjectError
 > => {
   const versions = readdirSync(args.cellPath)
     .map((fileName) => {
@@ -252,7 +257,7 @@ const discoverVersions = (args: {
     .sort((left, right) => left.value - right.value);
 
   if (versions.length === 0) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: args.cellPath,
         message: `Cell ${args.cellIndex} has no versioned markdown files.`,
@@ -268,7 +273,7 @@ const discoverVersions = (args: {
 
     const expected = index + 1;
     if (version.value !== expected) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: args.cellPath,
           message: `Cell ${args.cellIndex} has missing versions. Expected v${expected}.md but found v${version.value}.md.`,
@@ -277,22 +282,22 @@ const discoverVersions = (args: {
     }
   }
 
-  return ok(versions);
+  return Either.right(versions);
 };
 
 const parseExplicitDeps = (args: {
   readonly content: string;
   readonly cellIndex: number;
   readonly path: string;
-}): Result<LoadProjectError, ReadonlyArray<number> | null> => {
+}): Either.Either<ReadonlyArray<number> | null, LoadProjectError> => {
   const matched = args.content.match(DEPENDS_PATTERN);
   if (matched === null) {
-    return ok(null);
+    return Either.right(null);
   }
 
   const source = matched[1]?.trim() ?? "";
   if (source === "") {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: args.path,
         message: `Cell ${args.cellIndex} has an empty depends metadata declaration.`,
@@ -308,7 +313,7 @@ const parseExplicitDeps = (args: {
     }
 
     if (!/^\d+$/u.test(part)) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: args.path,
           message: `Cell ${args.cellIndex} has invalid dependency index '${part}'.`,
@@ -319,22 +324,22 @@ const parseExplicitDeps = (args: {
     parsed.push(Number.parseInt(part, 10));
   }
 
-  return ok([...new Set(parsed)].sort((left, right) => left - right));
+  return Either.right([...new Set(parsed)].sort((left, right) => left - right));
 };
 
 const parseCellAgent = (args: {
   readonly content: string;
   readonly cellIndex: number;
   readonly path: string;
-}): Result<LoadProjectError, AgentBackend | null> => {
+}): Either.Either<AgentBackend | null, LoadProjectError> => {
   const matched = args.content.match(AGENT_PATTERN);
   if (matched === null) {
-    return ok(null);
+    return Either.right(null);
   }
 
   const source = matched[1]?.trim() ?? "";
   if (source === "") {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: args.path,
         message: `Cell ${args.cellIndex} has an empty agent metadata declaration.`,
@@ -344,7 +349,7 @@ const parseCellAgent = (args: {
 
   const decoded = decodeAgentBackend(source);
   if (Either.isLeft(decoded)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: args.path,
         message: `Cell ${args.cellIndex} has invalid agent '${source}'.`,
@@ -352,7 +357,7 @@ const parseCellAgent = (args: {
     );
   }
 
-  return ok(decoded.right);
+  return Either.right(decoded.right);
 };
 
 const parseComments = (content: string): ReadonlyArray<string> => {
@@ -378,7 +383,7 @@ const parseComments = (content: string): ReadonlyArray<string> => {
 const loadArtifact = (args: {
   readonly cellPath: string;
   readonly cellIndex: number;
-}): Result<LoadProjectError, BuildArtifact | null> => {
+}): Either.Either<BuildArtifact | null, LoadProjectError> => {
   const artifactsPath = join(args.cellPath, "artifacts");
   const buildPath = join(artifactsPath, "build.yaml");
   const patchPath = join(artifactsPath, "build.patch");
@@ -389,11 +394,11 @@ const loadArtifact = (args: {
   const hasSummary = existsSync(summaryPath);
 
   if (!hasBuild && !hasPatch && !hasSummary) {
-    return ok(null);
+    return Either.right(null);
   }
 
   if (!(hasBuild && hasPatch && hasSummary)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: artifactsPath,
         message: `Cell ${args.cellIndex} has incomplete artifacts. Expected build.yaml, build.patch, and summary.md.`,
@@ -405,21 +410,21 @@ const loadArtifact = (args: {
     source: normalizeNewlines(readFileSync(buildPath, "utf8")),
     path: buildPath,
   });
-  if (!metadataResult.ok) {
-    return metadataResult;
+  if (Either.isLeft(metadataResult)) {
+    return Either.left(metadataResult.left);
   }
 
   const artifactPayload = {
-    files: metadataResult.value.files,
-    ref: metadataResult.value.ref,
-    timestamp: metadataResult.value.timestamp,
+    files: metadataResult.right.files,
+    ref: metadataResult.right.ref,
+    timestamp: metadataResult.right.timestamp,
     summary: readFileSync(summaryPath, "utf8"),
     patch: readFileSync(patchPath, "utf8"),
   };
 
   const decoded = decodeBuildArtifact(artifactPayload);
   if (Either.isLeft(decoded)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: buildPath,
         message: formatDecodeError(decoded.left),
@@ -427,7 +432,7 @@ const loadArtifact = (args: {
     );
   }
 
-  return ok(decoded.right);
+  return Either.right(decoded.right);
 };
 
 const determineCellState = (args: {
@@ -450,13 +455,13 @@ const determineCellState = (args: {
 const validateCells = (
   cells: ReadonlyArray<Cell>,
   cellsPath: string,
-): Result<LoadProjectError, ReadonlyArray<Cell>> => {
+): Either.Either<ReadonlyArray<Cell>, LoadProjectError> => {
   const validated: Cell[] = [];
 
   for (const cell of cells) {
     const decoded = decodeCell(cell);
     if (Either.isLeft(decoded)) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: join(cellsPath, String(cell.index)),
           message: formatDecodeError(decoded.left),
@@ -467,7 +472,7 @@ const validateCells = (
     validated.push(decoded.right);
   }
 
-  return ok(validated);
+  return Either.right(validated);
 };
 
 const createValidatedCell = (args: {
@@ -479,7 +484,7 @@ const createValidatedCell = (args: {
   readonly artifact: BuildArtifact | null;
   readonly state: Cell["state"];
   readonly path: string;
-}): Result<LoadProjectError, Cell> => {
+}): Either.Either<Cell, LoadProjectError> => {
   const payload: Cell = {
     index: args.cellIndex,
     content: args.content,
@@ -498,7 +503,7 @@ const createValidatedCell = (args: {
 
   const decoded = decodeCell(payload);
   if (Either.isLeft(decoded)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: args.path,
         message: formatDecodeError(decoded.left),
@@ -506,13 +511,13 @@ const createValidatedCell = (args: {
     );
   }
 
-  return ok(decoded.right);
+  return Either.right(decoded.right);
 };
 
 const parseConfigYaml = (args: {
   readonly source: string;
   readonly path: string;
-}): Result<LoadProjectError, Record<string, unknown>> => {
+}): Either.Either<Record<string, unknown>, LoadProjectError> => {
   const root: Record<string, unknown> = {};
   let currentSection: "vcs" | "execution" | null = null;
 
@@ -525,7 +530,7 @@ const parseConfigYaml = (args: {
     const indent = countLeadingSpaces(rawLine);
     const matched = trimmed.match(/^([A-Za-z][\w-]*):\s*(.*)$/u);
     if (matched === null) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: args.path,
           message: `Invalid config line '${trimmed}'.`,
@@ -535,7 +540,7 @@ const parseConfigYaml = (args: {
 
     const key = matched[1];
     if (key === undefined) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: args.path,
           message: `Invalid config line '${trimmed}'.`,
@@ -559,7 +564,7 @@ const parseConfigYaml = (args: {
     }
 
     if (currentSection === null) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: args.path,
           message: `Unexpected indentation in line '${trimmed}'.`,
@@ -569,7 +574,7 @@ const parseConfigYaml = (args: {
 
     const sectionValue = root[currentSection];
     if (typeof sectionValue !== "object" || sectionValue === null) {
-      return err(
+      return Either.left(
         new LoadProjectError({
           path: args.path,
           message: `Config section '${currentSection}' must be an object.`,
@@ -580,15 +585,19 @@ const parseConfigYaml = (args: {
     Reflect.set(sectionValue, key, parseYamlScalar(valueSource));
   }
 
-  return ok(root);
+  return Either.right(root);
 };
 
 const parseBuildMetadata = (args: {
   readonly source: string;
   readonly path: string;
-}): Result<
-  LoadProjectError,
-  { readonly files: ReadonlyArray<string>; readonly ref: string | null; readonly timestamp: string }
+}): Either.Either<
+  {
+    readonly files: ReadonlyArray<string>;
+    readonly ref: string | null;
+    readonly timestamp: string;
+  },
+  LoadProjectError
 > => {
   const files: string[] = [];
   let readingFiles = false;
@@ -632,7 +641,7 @@ const parseBuildMetadata = (args: {
   }
 
   if (timestamp === null || timestamp === "") {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: args.path,
         message: "build.yaml is missing a timestamp.",
@@ -640,54 +649,18 @@ const parseBuildMetadata = (args: {
     );
   }
 
-  return ok({
+  return Either.right({
     files,
     ref,
     timestamp,
   });
 };
 
-const parseYamlScalar = (source: string): unknown => {
-  const trimmed = source.trim();
-
-  if (trimmed === "" || trimmed === "null") {
-    return null;
-  }
-
-  if (trimmed === "true") {
-    return true;
-  }
-
-  if (trimmed === "false") {
-    return false;
-  }
-
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-
-  return trimmed;
-};
-
-const countLeadingSpaces = (line: string): number => {
-  const matched = line.match(/^\s*/u);
-  const prefix = matched?.[0] ?? "";
-  return prefix.length;
-};
-
-const formatDecodeError = (error: unknown): string =>
-  typeof error === "string" ? error : JSON.stringify(error, null, 2);
-
-const normalizeNewlines = (value: string): string => value.replaceAll("\r\n", "\n");
-
 export const createArtifactFromSummaryAndDiff = (args: {
   readonly summary: string;
   readonly diff: string;
   readonly timestamp?: string;
-}): Result<LoadProjectError, BuildArtifact> => {
+}): Either.Either<BuildArtifact, LoadProjectError> => {
   const payload = {
     files: [],
     ref: null,
@@ -698,7 +671,7 @@ export const createArtifactFromSummaryAndDiff = (args: {
 
   const decoded = decodeBuildArtifact(payload);
   if (Either.isLeft(decoded)) {
-    return err(
+    return Either.left(
       new LoadProjectError({
         path: "markdown",
         message: formatDecodeError(decoded.left),
@@ -706,5 +679,5 @@ export const createArtifactFromSummaryAndDiff = (args: {
     );
   }
 
-  return ok(decoded.right);
+  return Either.right(decoded.right);
 };

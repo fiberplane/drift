@@ -1,0 +1,11 @@
+id: no-on-mount
+language: Html
+message: Use $effect() with cleanup return instead of onMount/onDestroy
+severity: warning
+files:
+  - src/**/*.svelte
+rule:
+  pattern: <script $ATTRS>$BODY</script>
+constraints:
+  BODY:
+    regex: "\\b(onMount|onDestroy)\\s*\\("

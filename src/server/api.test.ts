@@ -41,7 +41,14 @@ describe("server api", () => {
           dependencies: [],
           dependents: [1],
           state: "clean",
+          content: "# Project",
           version: 1,
+          versions: [
+            {
+              version: 1,
+              content: "# Project",
+            },
+          ],
           artifactRef: null,
           artifact: null,
         },

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { Either } from "effect";
+
 import { applyDagToCells, buildDagGraph } from "./dag.ts";
 import type { Cell } from "./schemas.ts";
 
@@ -31,12 +33,12 @@ describe("dag", () => {
 
     const result = buildDagGraph(dependencies);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isLeft(result)) {
       return;
     }
 
-    expect([...result.value.dependenciesByCell.entries()]).toEqual([
+    expect([...result.right.dependenciesByCell.entries()]).toEqual([
       [0, []],
       [1, [0]],
       [2, [0]],
@@ -44,7 +46,7 @@ describe("dag", () => {
       [4, [2]],
     ]);
 
-    expect([...result.value.dependentsByCell.entries()]).toEqual([
+    expect([...result.right.dependentsByCell.entries()]).toEqual([
       [0, [1, 2]],
       [1, [3]],
       [2, [3, 4]],
@@ -52,12 +54,12 @@ describe("dag", () => {
       [4, []],
     ]);
 
-    expect(result.value.levels).toEqual([[0], [1, 2], [3, 4]]);
+    expect(result.right.levels).toEqual([[0], [1, 2], [3, 4]]);
 
     const hydratedCells = applyDagToCells({
       cells: [createCell(0), createCell(1), createCell(2), createCell(3), createCell(4)],
-      dependenciesByCell: result.value.dependenciesByCell,
-      dependentsByCell: result.value.dependentsByCell,
+      dependenciesByCell: result.right.dependenciesByCell,
+      dependentsByCell: result.right.dependentsByCell,
     });
 
     const cellThree = hydratedCells.find((cell) => cell.index === 3);
@@ -76,12 +78,12 @@ describe("dag", () => {
 
     const result = buildDagGraph(dependencies);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isRight(result)) {
       return;
     }
 
-    expect(result.error._tag).toBe("DagCycleError");
-    expect(result.error.cells).toEqual([1, 2]);
+    expect(result.left._tag).toBe("DagCycleError");
+    expect(result.left.cells).toEqual([1, 2]);
   });
 });

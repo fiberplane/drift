@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { Either } from "effect";
+
 import { DiffApplyError, InvalidDiffError } from "./errors.ts";
 
 export interface DiffSummary {
@@ -12,16 +14,6 @@ export interface AppliedUnifiedDiff {
   readonly patch: string;
   readonly files: readonly string[];
 }
-
-export type ApplyUnifiedDiffResult =
-  | {
-      readonly ok: true;
-      readonly value: AppliedUnifiedDiff;
-    }
-  | {
-      readonly ok: false;
-      readonly error: InvalidDiffError | DiffApplyError;
-    };
 
 interface ParsedUnifiedDiff {
   readonly patch: string;
@@ -41,25 +33,6 @@ interface ParsedHunk {
   readonly newCount: number;
   readonly lines: readonly string[];
 }
-
-type ParseResult<A> =
-  | {
-      readonly ok: true;
-      readonly value: A;
-    }
-  | {
-      readonly ok: false;
-      readonly error: InvalidDiffError;
-    };
-
-type ApplyFileResult =
-  | {
-      readonly ok: true;
-    }
-  | {
-      readonly ok: false;
-      readonly error: DiffApplyError;
-    };
 
 export const summarizeUnifiedDiff = (patch: string): DiffSummary => {
   const lines = patch.split("\n");
@@ -88,46 +61,39 @@ export const applyUnifiedDiff = (args: {
   readonly cwd: string;
   readonly cellIndex: number;
   readonly rawOutput: string;
-}): ApplyUnifiedDiffResult => {
+}): Either.Either<AppliedUnifiedDiff, InvalidDiffError | DiffApplyError> => {
   const parsed = parseUnifiedDiff({
     cellIndex: args.cellIndex,
     rawOutput: args.rawOutput,
   });
 
-  if (!parsed.ok) {
-    return {
-      ok: false,
-      error: parsed.error,
-    };
+  if (Either.isLeft(parsed)) {
+    return Either.left(parsed.left);
   }
 
   const touchedFiles: string[] = [];
   const seen = new Set<string>();
 
-  for (const filePatch of parsed.value.files) {
+  for (const filePatch of parsed.right.files) {
     const touchedPath = getTouchedPath(filePatch);
     if (touchedPath === null) {
-      return {
-        ok: false,
-        error: createInvalidDiffError({
+      return Either.left(
+        createInvalidDiffError({
           cellIndex: args.cellIndex,
           rawOutput: args.rawOutput,
         }),
-      };
+      );
     }
 
     const applyResult = applyFilePatch({
       cwd: args.cwd,
       cellIndex: args.cellIndex,
-      patch: parsed.value.patch,
+      patch: parsed.right.patch,
       filePatch,
     });
 
-    if (!applyResult.ok) {
-      return {
-        ok: false,
-        error: applyResult.error,
-      };
+    if (Either.isLeft(applyResult)) {
+      return Either.left(applyResult.left);
     }
 
     if (!seen.has(touchedPath)) {
@@ -136,24 +102,21 @@ export const applyUnifiedDiff = (args: {
     }
   }
 
-  return {
-    ok: true,
-    value: {
-      patch: parsed.value.patch,
-      files: touchedFiles,
-    },
-  };
+  return Either.right({
+    patch: parsed.right.patch,
+    files: touchedFiles,
+  });
 };
 
 const parseUnifiedDiff = (args: {
   readonly cellIndex: number;
   readonly rawOutput: string;
-}): ParseResult<ParsedUnifiedDiff> => {
+}): Either.Either<ParsedUnifiedDiff, InvalidDiffError> => {
   const normalizedRaw = normalizePatch(args.rawOutput);
   const lines = splitPatchLines(normalizedRaw);
 
   if (lines.length === 0) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const files: ParsedFilePatch[] = [];
@@ -173,12 +136,12 @@ const parseUnifiedDiff = (args: {
         rawOutput: args.rawOutput,
       });
 
-      if (!parsedFile.ok) {
-        return parsedFile;
+      if (Either.isLeft(parsedFile)) {
+        return Either.left(parsedFile.left);
       }
 
-      files.push(parsedFile.value.filePatch);
-      index = parsedFile.value.nextIndex;
+      files.push(parsedFile.right.filePatch);
+      index = parsedFile.right.nextIndex;
       continue;
     }
 
@@ -187,16 +150,16 @@ const parseUnifiedDiff = (args: {
       continue;
     }
 
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   if (files.length === 0) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const normalizedPatch = normalizedRaw.endsWith("\n") ? normalizedRaw : `${normalizedRaw}\n`;
 
-  return parseOk({
+  return Either.right({
     patch: normalizedPatch,
     files,
   });
@@ -207,28 +170,31 @@ const parseFilePatch = (args: {
   readonly index: number;
   readonly cellIndex: number;
   readonly rawOutput: string;
-}): ParseResult<{
-  readonly filePatch: ParsedFilePatch;
-  readonly nextIndex: number;
-}> => {
+}): Either.Either<
+  {
+    readonly filePatch: ParsedFilePatch;
+    readonly nextIndex: number;
+  },
+  InvalidDiffError
+> => {
   const oldHeader = args.lines[args.index];
   if (oldHeader === undefined) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const oldPath = parseHeaderPath(oldHeader, "--- ");
   if (oldPath === null) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const nextHeader = args.lines[args.index + 1];
   if (nextHeader === undefined || !nextHeader.startsWith("+++ ")) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const newPath = parseHeaderPath(nextHeader, "+++ ");
   if (newPath === null || (oldPath === "/dev/null" && newPath === "/dev/null")) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const hunks: ParsedHunk[] = [];
@@ -252,12 +218,12 @@ const parseFilePatch = (args: {
         rawOutput: args.rawOutput,
       });
 
-      if (!parsedHunk.ok) {
-        return parsedHunk;
+      if (Either.isLeft(parsedHunk)) {
+        return Either.left(parsedHunk.left);
       }
 
-      hunks.push(parsedHunk.value.hunk);
-      cursor = parsedHunk.value.nextIndex;
+      hunks.push(parsedHunk.right.hunk);
+      cursor = parsedHunk.right.nextIndex;
       continue;
     }
 
@@ -266,14 +232,14 @@ const parseFilePatch = (args: {
       continue;
     }
 
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   if (hunks.length === 0) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
-  return parseOk({
+  return Either.right({
     filePatch: {
       oldPath,
       newPath,
@@ -288,25 +254,28 @@ const parseHunk = (args: {
   readonly index: number;
   readonly cellIndex: number;
   readonly rawOutput: string;
-}): ParseResult<{
-  readonly hunk: ParsedHunk;
-  readonly nextIndex: number;
-}> => {
+}): Either.Either<
+  {
+    readonly hunk: ParsedHunk;
+    readonly nextIndex: number;
+  },
+  InvalidDiffError
+> => {
   const header = args.lines[args.index];
   if (header === undefined) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const headerMatch = header.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/u);
   if (headerMatch === null) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const oldStartRaw = headerMatch[1];
   const newStartRaw = headerMatch[3];
 
   if (oldStartRaw === undefined || newStartRaw === undefined) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const oldStart = parseHunkNumber(oldStartRaw);
@@ -315,7 +284,7 @@ const parseHunk = (args: {
   const newCount = parseHunkNumber(headerMatch[4] ?? "1");
 
   if (oldStart === null || oldCount === null || newStart === null || newCount === null) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const lines: string[] = [];
@@ -342,7 +311,7 @@ const parseHunk = (args: {
       continue;
     }
 
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
   const observedOldCount = lines.filter(
@@ -353,10 +322,10 @@ const parseHunk = (args: {
   ).length;
 
   if (observedOldCount !== oldCount || observedNewCount !== newCount) {
-    return parseErr(args);
+    return Either.left(createInvalidDiffError(args));
   }
 
-  return parseOk({
+  return Either.right({
     hunk: {
       oldStart,
       oldCount,
@@ -373,17 +342,19 @@ const applyFilePatch = (args: {
   readonly cellIndex: number;
   readonly patch: string;
   readonly filePatch: ParsedFilePatch;
-}): ApplyFileResult => {
+}): Either.Either<void, DiffApplyError> => {
   const sourcePath =
     args.filePatch.oldPath === "/dev/null" ? null : join(args.cwd, args.filePatch.oldPath);
   const sourceContent = sourcePath === null ? "" : readTextFile(sourcePath);
 
   if (sourcePath !== null && sourceContent === null) {
-    return applyErr({
-      cellIndex: args.cellIndex,
-      patch: args.patch,
-      stderr: `Diff target does not exist: ${args.filePatch.oldPath}`,
-    });
+    return Either.left(
+      new DiffApplyError({
+        cellIndex: args.cellIndex,
+        patch: args.patch,
+        stderr: `Diff target does not exist: ${args.filePatch.oldPath}`,
+      }),
+    );
   }
 
   const sourceLines = splitContentLines(sourceContent ?? "");
@@ -394,21 +365,25 @@ const applyFilePatch = (args: {
     const hunkStart = Math.max(0, hunk.oldStart - 1);
 
     if (hunkStart < sourceCursor) {
-      return applyErr({
-        cellIndex: args.cellIndex,
-        patch: args.patch,
-        stderr: `Overlapping hunk detected for ${getTouchedPath(args.filePatch) ?? "unknown"}.`,
-      });
+      return Either.left(
+        new DiffApplyError({
+          cellIndex: args.cellIndex,
+          patch: args.patch,
+          stderr: `Overlapping hunk detected for ${getTouchedPath(args.filePatch) ?? "unknown"}.`,
+        }),
+      );
     }
 
     while (sourceCursor < hunkStart) {
       const sourceLine = sourceLines[sourceCursor];
       if (sourceLine === undefined) {
-        return applyErr({
-          cellIndex: args.cellIndex,
-          patch: args.patch,
-          stderr: `Hunk out of range for ${getTouchedPath(args.filePatch) ?? "unknown"}.`,
-        });
+        return Either.left(
+          new DiffApplyError({
+            cellIndex: args.cellIndex,
+            patch: args.patch,
+            stderr: `Hunk out of range for ${getTouchedPath(args.filePatch) ?? "unknown"}.`,
+          }),
+        );
       }
 
       outputLines.push(sourceLine);
@@ -426,11 +401,13 @@ const applyFilePatch = (args: {
 
       if (marker === " ") {
         if (sourceLine !== value) {
-          return applyErr({
-            cellIndex: args.cellIndex,
-            patch: args.patch,
-            stderr: createHunkMismatchMessage(args.filePatch, sourceCursor, value, sourceLine),
-          });
+          return Either.left(
+            new DiffApplyError({
+              cellIndex: args.cellIndex,
+              patch: args.patch,
+              stderr: createHunkMismatchMessage(args.filePatch, sourceCursor, value, sourceLine),
+            }),
+          );
         }
 
         outputLines.push(value);
@@ -440,11 +417,13 @@ const applyFilePatch = (args: {
 
       if (marker === "-") {
         if (sourceLine !== value) {
-          return applyErr({
-            cellIndex: args.cellIndex,
-            patch: args.patch,
-            stderr: createHunkMismatchMessage(args.filePatch, sourceCursor, value, sourceLine),
-          });
+          return Either.left(
+            new DiffApplyError({
+              cellIndex: args.cellIndex,
+              patch: args.patch,
+              stderr: createHunkMismatchMessage(args.filePatch, sourceCursor, value, sourceLine),
+            }),
+          );
         }
 
         sourceCursor += 1;
@@ -456,11 +435,13 @@ const applyFilePatch = (args: {
         continue;
       }
 
-      return applyErr({
-        cellIndex: args.cellIndex,
-        patch: args.patch,
-        stderr: `Unsupported hunk marker '${marker}' in ${getTouchedPath(args.filePatch) ?? "unknown"}.`,
-      });
+      return Either.left(
+        new DiffApplyError({
+          cellIndex: args.cellIndex,
+          patch: args.patch,
+          stderr: `Unsupported hunk marker '${marker}' in ${getTouchedPath(args.filePatch) ?? "unknown"}.`,
+        }),
+      );
     }
   }
 
@@ -476,11 +457,13 @@ const applyFilePatch = (args: {
 
   const targetPath = getTouchedPath(args.filePatch);
   if (targetPath === null) {
-    return applyErr({
-      cellIndex: args.cellIndex,
-      patch: args.patch,
-      stderr: "Patch did not contain a valid target file path.",
-    });
+    return Either.left(
+      new DiffApplyError({
+        cellIndex: args.cellIndex,
+        patch: args.patch,
+        stderr: "Patch did not contain a valid target file path.",
+      }),
+    );
   }
 
   if (args.filePatch.newPath === "/dev/null") {
@@ -489,9 +472,7 @@ const applyFilePatch = (args: {
       rmSync(deletePath);
     }
 
-    return {
-      ok: true,
-    };
+    return Either.right(undefined);
   }
 
   const absolutePath = join(args.cwd, targetPath);
@@ -499,9 +480,7 @@ const applyFilePatch = (args: {
   const rendered = outputLines.length === 0 ? "" : `${outputLines.join("\n")}\n`;
   writeFileSync(absolutePath, rendered);
 
-  return {
-    ok: true,
-  };
+  return Either.right(undefined);
 };
 
 const parseHeaderPath = (line: string, prefix: "--- " | "+++ "): string | null => {
@@ -612,32 +591,6 @@ const createHunkMismatchMessage = (
   const actualLabel = actual === undefined ? "<end-of-file>" : actual;
   return `Hunk does not match ${touchedPath} at line ${sourceCursor + 1}. Expected '${expected}', found '${actualLabel}'.`;
 };
-
-const parseOk = <A>(value: A): ParseResult<A> => ({
-  ok: true,
-  value,
-});
-
-const parseErr = (args: {
-  readonly cellIndex: number;
-  readonly rawOutput: string;
-}): ParseResult<never> => ({
-  ok: false,
-  error: createInvalidDiffError(args),
-});
-
-const applyErr = (args: {
-  readonly cellIndex: number;
-  readonly patch: string;
-  readonly stderr: string;
-}): ApplyFileResult => ({
-  ok: false,
-  error: new DiffApplyError({
-    cellIndex: args.cellIndex,
-    patch: args.patch,
-    stderr: args.stderr,
-  }),
-});
 
 const createInvalidDiffError = (args: {
   readonly cellIndex: number;

@@ -4,8 +4,6 @@ export * from "./dag.ts";
 export * from "./diff.ts";
 export * from "./errors.ts";
 export {
-  err,
-  ok,
   runAllStaleBuild,
   runOneCellBuild,
   type BuildCallbacks,
@@ -17,7 +15,6 @@ export {
   type EngineError,
   type ExecutionAttempt,
   type ExecutionCell,
-  type Result,
 } from "./execution-engine.ts";
 export * from "./imports.ts";
 export * from "./inlines.ts";

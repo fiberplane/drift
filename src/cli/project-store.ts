@@ -1,20 +1,22 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { Either } from "effect";
+
 import { writeBuildArtifacts } from "../core/build-artifacts.ts";
-import {
-  err,
-  ok,
-  type BuildArtifact,
-  type CellState,
-  type ExecutionCell,
-  type Result,
-} from "../core/execution-engine.ts";
+import type { BuildArtifact, CellState, ExecutionCell } from "../core/execution-engine.ts";
 import { normalizePath } from "./types.ts";
+
+export interface DriftCellVersionRecord {
+  readonly version: number;
+  readonly path: string;
+  readonly content: string;
+}
 
 export interface DriftCellRecord extends ExecutionCell {
   readonly title: string;
   readonly content: string;
+  readonly versions: readonly DriftCellVersionRecord[];
   readonly version: number;
   readonly versionPath: string;
   readonly cellDir: string;
@@ -70,10 +72,10 @@ interface ParsedBuildMetadata {
   readonly timestamp: string | null;
 }
 
-export const createNewProject = (rootDir: string): Result<ProjectError, DriftProject> => {
+export const createNewProject = (rootDir: string): Either.Either<DriftProject, ProjectError> => {
   const driftDir = join(rootDir, ".drift");
   if (existsSync(driftDir)) {
-    return err({ tag: "already-exists", path: driftDir });
+    return Either.left({ tag: "already-exists", path: driftDir });
   }
 
   const cellsDir = join(driftDir, "cells");
@@ -86,15 +88,15 @@ export const createNewProject = (rootDir: string): Result<ProjectError, DriftPro
   return loadProject(rootDir);
 };
 
-export const loadProject = (rootDir: string): Result<ProjectError, DriftProject> => {
+export const loadProject = (rootDir: string): Either.Either<DriftProject, ProjectError> => {
   const driftDir = join(rootDir, ".drift");
   if (!existsSync(driftDir)) {
-    return err({ tag: "missing-drift", path: driftDir });
+    return Either.left({ tag: "missing-drift", path: driftDir });
   }
 
   const cellsDir = join(driftDir, "cells");
   if (!existsSync(cellsDir)) {
-    return err({ tag: "missing-cells", path: cellsDir });
+    return Either.left({ tag: "missing-cells", path: cellsDir });
   }
 
   const configPath = join(driftDir, "config.yaml");
@@ -118,13 +120,23 @@ export const loadProject = (rootDir: string): Result<ProjectError, DriftProject>
       continue;
     }
 
-    const latestVersionName = versionFiles[versionFiles.length - 1];
-    if (latestVersionName === undefined) {
+    const versions = versionFiles.map((versionFile) => {
+      const path = join(cellDir, versionFile);
+
+      return {
+        version: parseVersionNumber(versionFile),
+        path,
+        content: readFileSync(path, "utf8"),
+      };
+    });
+
+    const latestVersion = versions[versions.length - 1];
+    if (latestVersion === undefined) {
       continue;
     }
 
-    const versionPath = join(cellDir, latestVersionName);
-    const content = readFileSync(versionPath, "utf8");
+    const versionPath = latestVersion.path;
+    const content = latestVersion.content;
     const dependencies = parseDependencies(content, index);
     const title = parseTitle(content, index);
 
@@ -163,7 +175,8 @@ export const loadProject = (rootDir: string): Result<ProjectError, DriftProject>
       artifact,
       title,
       content,
-      version: parseVersionNumber(latestVersionName),
+      versions,
+      version: latestVersion.version,
       versionPath,
       cellDir,
       artifactRef: buildMetadata.ref,
@@ -193,7 +206,7 @@ export const loadProject = (rootDir: string): Result<ProjectError, DriftProject>
     state: propagatedStates.get(cell.index) ?? cell.state,
   }));
 
-  return ok({
+  return Either.right({
     rootDir,
     driftDir,
     configRaw,
@@ -205,7 +218,7 @@ export const persistExecutionArtifacts = (args: {
   readonly project: DriftProject;
   readonly executedCellIndexes: readonly number[];
   readonly updatedCells: readonly ExecutionCell[];
-}): Result<ProjectError, void> => {
+}): Either.Either<void, ProjectError> => {
   const executed = new Set(args.executedCellIndexes);
 
   for (const cell of args.updatedCells) {
@@ -219,7 +232,7 @@ export const persistExecutionArtifacts = (args: {
 
     const sourceCell = args.project.cells.find((candidate) => candidate.index === cell.index);
     if (sourceCell === undefined) {
-      return err({ tag: "missing-cell", cellIndex: cell.index });
+      return Either.left({ tag: "missing-cell", cellIndex: cell.index });
     }
 
     writeBuildArtifacts({
@@ -229,18 +242,18 @@ export const persistExecutionArtifacts = (args: {
     });
   }
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 export const updateCellCommitRef = (args: {
   readonly project: DriftProject;
   readonly cellIndexes: readonly number[];
   readonly ref: string;
-}): Result<ProjectError, void> => {
+}): Either.Either<void, ProjectError> => {
   for (const cellIndex of args.cellIndexes) {
     const cell = args.project.cells.find((candidate) => candidate.index === cellIndex);
     if (cell === undefined || cell.artifact === null) {
-      return err({ tag: "missing-cell", cellIndex });
+      return Either.left({ tag: "missing-cell", cellIndex });
     }
 
     writeBuildArtifacts({
@@ -250,17 +263,17 @@ export const updateCellCommitRef = (args: {
     });
   }
 
-  return ok(undefined);
+  return Either.right(undefined);
 };
 
 export const createPlannedVersion = (args: {
   readonly project: DriftProject;
   readonly cellIndex: number;
   readonly nowIso: string;
-}): Result<ProjectError, { readonly from: number; readonly to: number }> => {
+}): Either.Either<{ readonly from: number; readonly to: number }, ProjectError> => {
   const cell = args.project.cells.find((candidate) => candidate.index === args.cellIndex);
   if (cell === undefined) {
-    return err({ tag: "missing-cell", cellIndex: args.cellIndex });
+    return Either.left({ tag: "missing-cell", cellIndex: args.cellIndex });
   }
 
   const nextVersion = cell.version + 1;
@@ -268,7 +281,7 @@ export const createPlannedVersion = (args: {
   const expanded = buildPlannedCellContent(cell.content, args.nowIso);
   writeFileSync(nextPath, expanded);
 
-  return ok({ from: cell.version, to: nextVersion });
+  return Either.right({ from: cell.version, to: nextVersion });
 };
 
 export const assembleProjectMarkdown = (project: DriftProject): string => {
@@ -314,28 +327,28 @@ export const initializeProjectFromMarkdown = (args: {
   readonly rootDir: string;
   readonly markdownPath: string;
   readonly nowIso: string;
-}): Result<ProjectError, { readonly cells: number }> => {
+}): Either.Either<{ readonly cells: number }, ProjectError> => {
   if (!existsSync(args.markdownPath)) {
-    return err({ tag: "missing-file", path: args.markdownPath });
+    return Either.left({ tag: "missing-file", path: args.markdownPath });
   }
 
   const source = readFileSync(args.markdownPath, "utf8").replaceAll("\r\n", "\n");
   const parsed = parseAssembledMarkdown(source);
-  if (!parsed.ok) {
-    return parsed;
+  if (Either.isLeft(parsed)) {
+    return Either.left(parsed.left);
   }
 
   const driftDir = join(args.rootDir, ".drift");
   if (existsSync(driftDir)) {
-    return err({ tag: "already-exists", path: driftDir });
+    return Either.left({ tag: "already-exists", path: driftDir });
   }
 
   const cellsDir = join(driftDir, "cells");
   mkdirSync(cellsDir, { recursive: true });
-  writeFileSync(join(driftDir, "config.yaml"), `${parsed.value.config.trimEnd()}\n`);
+  writeFileSync(join(driftDir, "config.yaml"), `${parsed.right.config.trimEnd()}\n`);
 
-  for (let index = 0; index < parsed.value.cells.length; index += 1) {
-    const parsedCell = parsed.value.cells[index];
+  for (let index = 0; index < parsed.right.cells.length; index += 1) {
+    const parsedCell = parsed.right.cells[index];
     if (parsedCell === undefined) {
       continue;
     }
@@ -362,7 +375,7 @@ export const initializeProjectFromMarkdown = (args: {
     });
   }
 
-  return ok({ cells: parsed.value.cells.length });
+  return Either.right({ cells: parsed.right.cells.length });
 };
 
 export const ensureGeneratedFile = (args: {
@@ -539,8 +552,7 @@ const buildPlannedCellContent = (content: string, nowIso: string): string => {
 
 const parseAssembledMarkdown = (
   source: string,
-): Result<
-  ProjectError,
+): Either.Either<
   {
     readonly config: string;
     readonly cells: readonly {
@@ -548,10 +560,11 @@ const parseAssembledMarkdown = (
       readonly summary: string | null;
       readonly diff: string | null;
     }[];
-  }
+  },
+  ProjectError
 > => {
   if (!source.startsWith("---\n")) {
-    return err({
+    return Either.left({
       tag: "invalid-markdown",
       message: "Assembled markdown must start with YAML frontmatter.",
     });
@@ -559,7 +572,7 @@ const parseAssembledMarkdown = (
 
   const frontmatterEnd = source.indexOf("\n---\n", 4);
   if (frontmatterEnd < 0) {
-    return err({
+    return Either.left({
       tag: "invalid-markdown",
       message: "Missing closing frontmatter separator.",
     });
@@ -574,13 +587,13 @@ const parseAssembledMarkdown = (
     .filter((chunk) => chunk.content.trim() !== "");
 
   if (cells.length === 0) {
-    return err({
+    return Either.left({
       tag: "invalid-markdown",
       message: "Assembled markdown has no cell sections.",
     });
   }
 
-  return ok({
+  return Either.right({
     config,
     cells,
   });

@@ -1,54 +1,63 @@
 <script lang="ts">
   import Cell from "./Cell.svelte";
-  import {
-    createInitialNotebook,
-    createToolbarState,
-    setActiveCell,
-    setCellState,
-    updateCellInput,
-  } from "../state/index.ts";
+  import DagMinimap from "./DagMinimap.svelte";
+  import { createToolbarState } from "../state/index.ts";
   import type {
     CellActionRequest,
     CellInputChange,
+    CellVersionRestoreRequest,
+    CellVersionSelectionChange,
     NotebookViewModel,
     ToolbarAction,
     ToolbarActionRequest,
   } from "../types.ts";
 
   interface Props {
-    readonly initialModel?: NotebookViewModel;
+    readonly model: NotebookViewModel;
     readonly onCellAction?: (request: CellActionRequest) => void;
     readonly onToolbarAction?: (request: ToolbarActionRequest) => void;
+    readonly onCellInput?: (change: CellInputChange) => void;
+    readonly onMinimapSelect?: (cellIndex: number) => void;
+    readonly onVersionSelect?: (change: CellVersionSelectionChange) => void;
+    readonly onVersionRestore?: (request: CellVersionRestoreRequest) => void;
   }
 
-  const noopCellAction = (_request: CellActionRequest): void => {};
-  const noopToolbarAction = (_request: ToolbarActionRequest): void => {};
+  const noop = (): void => {};
 
-  let {
-    initialModel: notebook = createInitialNotebook(),
-    onCellAction = noopCellAction,
-    onToolbarAction = noopToolbarAction,
+  const {
+    model,
+    onCellAction = noop,
+    onToolbarAction = noop,
+    onCellInput = noop,
+    onMinimapSelect = noop,
+    onVersionSelect = noop,
+    onVersionRestore = noop,
   }: Props = $props();
 
-  const toolbar = $derived(createToolbarState(notebook));
+  const toolbar = $derived(createToolbarState(model));
 
   const handleCellInput = (change: CellInputChange): void => {
-    notebook = setActiveCell(notebook, change.cellIndex);
-    notebook = updateCellInput(notebook, change.cellIndex, change.value);
+    onCellInput(change);
   };
 
   const handleCellAction = (request: CellActionRequest): void => {
-    notebook = setActiveCell(notebook, request.cellIndex);
-
-    if (request.action === "plan" || request.action === "build") {
-      notebook = setCellState(notebook, request.cellIndex, "running");
-    }
-
     onCellAction(request);
+  };
+
+  const handleVersionSelect = (change: CellVersionSelectionChange): void => {
+    onVersionSelect(change);
+  };
+
+  const handleVersionRestore = (request: CellVersionRestoreRequest): void => {
+    onVersionRestore(request);
   };
 
   const handleToolbarAction = (action: ToolbarAction): void => {
     onToolbarAction({ action });
+  };
+
+  const handleMinimapSelect = (cellIndex: number): void => {
+    onMinimapSelect(cellIndex);
   };
 
   const isToolbarActionDisabled = (action: ToolbarAction): boolean => {
@@ -86,13 +95,24 @@
     </div>
   </header>
 
-  {#if notebook.cells.length === 0}
+  {#if model.cells.length === 0}
     <p class="empty">No cells yet. Add your first spec cell to begin.</p>
   {:else}
-    <div class="cells">
-      {#each notebook.cells as cell (cell.index)}
-        <Cell {cell} isActive={notebook.activeCell === cell.index} onAction={handleCellAction} onInput={handleCellInput} />
-      {/each}
+    <div class="workspace">
+      <DagMinimap cells={model.cells} activeCell={model.activeCell} onSelect={handleMinimapSelect} />
+
+      <div class="cells">
+        {#each model.cells as cell (cell.index)}
+          <Cell
+            {cell}
+            isActive={model.activeCell === cell.index}
+            onAction={handleCellAction}
+            onInput={handleCellInput}
+            onVersionSelect={handleVersionSelect}
+            onVersionRestore={handleVersionRestore}
+          />
+        {/each}
+      </div>
     </div>
   {/if}
 </section>
@@ -100,10 +120,11 @@
 <style>
   .notebook {
     display: grid;
-    gap: 1rem;
-    max-width: 62rem;
+    gap: 0;
+    max-width: 76rem;
     margin: 0 auto;
-    padding: 1rem;
+    padding: 0 2rem;
+    width: 100%;
   }
 
   .toolbar {
@@ -111,54 +132,95 @@
     justify-content: space-between;
     align-items: center;
     gap: 1rem;
-    border-bottom: 1px solid #e5e7eb;
-    padding-bottom: 0.75rem;
+    padding: 1.25rem 0 1rem;
+    border-bottom: 1px solid var(--border-light);
+    position: sticky;
+    top: 0;
+    background: var(--bg-page);
+    z-index: 10;
   }
 
   h1 {
     margin: 0;
-    font-size: 1.1rem;
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 400;
+    font-style: italic;
+    color: var(--text-body);
+    letter-spacing: -0.02em;
   }
 
   .toolbar-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem;
+    gap: 0.4rem;
   }
 
   .toolbar-button {
-    border: 1px solid #d1d5db;
-    border-radius: 0.55rem;
-    background: #fff;
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
     padding: 0.35rem 0.7rem;
-    font-size: 0.82rem;
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--text-secondary);
     display: inline-flex;
     align-items: center;
     gap: 0.45rem;
     cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .toolbar-button:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text-body);
   }
 
   .toolbar-button:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
   }
 
   .toolbar-button .count {
-    min-width: 1.4rem;
+    min-width: 1.3rem;
     text-align: center;
     border-radius: 999px;
-    background: #f3f4f6;
-    padding: 0.02rem 0.35rem;
-    font-size: 0.72rem;
+    background: var(--bg-inset);
+    padding: 0.05rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+  }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: 15rem minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+    padding-top: 1.25rem;
+    padding-bottom: 4rem;
   }
 
   .cells {
     display: grid;
-    gap: 0.8rem;
+    gap: 1.15rem;
   }
 
   .empty {
     margin: 0;
-    color: #6b7280;
+    color: var(--text-tertiary);
+    font-style: italic;
+    padding: 3rem 0;
+  }
+
+  @media (max-width: 960px) {
+    .notebook {
+      padding: 0 1rem;
+    }
+    .workspace {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

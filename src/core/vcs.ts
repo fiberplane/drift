@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
+import { Either } from "effect";
+
 import { VcsCommitError } from "./errors.ts";
 
 export type VcsBackendName = "git" | "jj";
@@ -31,16 +33,10 @@ export interface VcsRuntime {
   readonly readTextFile: (path: string) => string | null;
 }
 
-export type CommitResult =
-  | {
-      readonly ok: true;
-      readonly backend: VcsBackendName;
-      readonly ref: string;
-    }
-  | {
-      readonly ok: false;
-      readonly error: VcsCommitError;
-    };
+export interface CommitSuccess {
+  readonly backend: VcsBackendName;
+  readonly ref: string;
+}
 
 export interface DriftDetectionRequest {
   readonly cwd: string;
@@ -79,7 +75,7 @@ export const resolveVcsBackend = (args: {
 export const commitWithVcs = (
   request: CommitRequest,
   runtime: Pick<VcsRuntime, "pathExists" | "runCommand">,
-): CommitResult => {
+): Either.Either<CommitSuccess, VcsCommitError> => {
   const files = normalizeFiles(request.files);
   if (files.length === 0) {
     return failCommit(request, "No files were selected for commit.");
@@ -106,15 +102,14 @@ export const commitWithVcs = (
           runCommand: runtime.runCommand,
         });
 
-  if (!commitResult.ok) {
-    return failCommit(request, commitResult.stderr);
+  if (Either.isLeft(commitResult)) {
+    return failCommit(request, commitResult.left);
   }
 
-  return {
-    ok: true,
+  return Either.right({
     backend,
-    ref: commitResult.ref,
-  };
+    ref: commitResult.right,
+  });
 };
 
 export const detectDrift = (
@@ -248,32 +243,19 @@ export const formatCommitSummary = (request: Pick<CommitRequest, "backend" | "fi
   return `${request.backend} commit (${fileCount} ${noun})`;
 };
 
-type BackendCommitResult =
-  | {
-      readonly ok: true;
-      readonly ref: string;
-    }
-  | {
-      readonly ok: false;
-      readonly stderr: string;
-    };
-
 const commitWithGit = (args: {
   readonly cwd: string;
   readonly files: ReadonlyArray<string>;
   readonly message: string;
   readonly runCommand: (command: VcsCommand) => VcsCommandResult;
-}): BackendCommitResult => {
+}): Either.Either<string, string> => {
   const addResult = args.runCommand({
     cwd: args.cwd,
     cmd: ["git", "add", "--", ...args.files],
   });
 
   if (addResult.exitCode !== 0) {
-    return {
-      ok: false,
-      stderr: readCommandMessage(addResult, "git add failed"),
-    };
+    return Either.left(readCommandMessage(addResult, "git add failed"));
   }
 
   const commitResult = args.runCommand({
@@ -282,10 +264,7 @@ const commitWithGit = (args: {
   });
 
   if (commitResult.exitCode !== 0) {
-    return {
-      ok: false,
-      stderr: readCommandMessage(commitResult, "git commit failed"),
-    };
+    return Either.left(readCommandMessage(commitResult, "git commit failed"));
   }
 
   const refResult = args.runCommand({
@@ -294,24 +273,15 @@ const commitWithGit = (args: {
   });
 
   if (refResult.exitCode !== 0) {
-    return {
-      ok: false,
-      stderr: readCommandMessage(refResult, "Could not read git ref"),
-    };
+    return Either.left(readCommandMessage(refResult, "Could not read git ref"));
   }
 
   const ref = refResult.stdout.trim();
   if (ref === "") {
-    return {
-      ok: false,
-      stderr: "Could not resolve git commit ref",
-    };
+    return Either.left("Could not resolve git commit ref");
   }
 
-  return {
-    ok: true,
-    ref,
-  };
+  return Either.right(ref);
 };
 
 const commitWithJj = (args: {
@@ -319,17 +289,14 @@ const commitWithJj = (args: {
   readonly files: ReadonlyArray<string>;
   readonly message: string;
   readonly runCommand: (command: VcsCommand) => VcsCommandResult;
-}): BackendCommitResult => {
+}): Either.Either<string, string> => {
   const commitResult = args.runCommand({
     cwd: args.cwd,
     cmd: ["jj", "commit", "-m", args.message, "--", ...args.files],
   });
 
   if (commitResult.exitCode !== 0) {
-    return {
-      ok: false,
-      stderr: readCommandMessage(commitResult, "jj commit failed"),
-    };
+    return Either.left(readCommandMessage(commitResult, "jj commit failed"));
   }
 
   const refResult = args.runCommand({
@@ -338,33 +305,27 @@ const commitWithJj = (args: {
   });
 
   if (refResult.exitCode !== 0) {
-    return {
-      ok: false,
-      stderr: readCommandMessage(refResult, "Could not read jj commit ref"),
-    };
+    return Either.left(readCommandMessage(refResult, "Could not read jj commit ref"));
   }
 
   const ref = refResult.stdout.trim();
   if (ref === "") {
-    return {
-      ok: false,
-      stderr: "Could not resolve jj commit ref",
-    };
+    return Either.left("Could not resolve jj commit ref");
   }
 
-  return {
-    ok: true,
-    ref,
-  };
+  return Either.right(ref);
 };
 
-const failCommit = (request: CommitRequest, stderr: string): CommitResult => ({
-  ok: false,
-  error: new VcsCommitError({
-    cellIndices: [...request.cellIndices],
-    stderr,
-  }),
-});
+const failCommit = (
+  request: CommitRequest,
+  stderr: string,
+): Either.Either<CommitSuccess, VcsCommitError> =>
+  Either.left(
+    new VcsCommitError({
+      cellIndices: [...request.cellIndices],
+      stderr,
+    }),
+  );
 
 const detectDriftFromRef = (args: {
   readonly cwd: string;

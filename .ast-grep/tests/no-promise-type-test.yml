@@ -1,0 +1,7 @@
+id: no-promise-type
+valid:
+  - |
+    type Task = Effect.Effect<number, never, never>
+invalid:
+  - |
+    type Task = Promise<number>

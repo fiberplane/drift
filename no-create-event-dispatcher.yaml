@@ -1,7 +1,0 @@
-id: no-create-event-dispatcher
-language: typescript
-message: Use callback props instead of createEventDispatcher
-severity: error
-rule:
-  kind: call_expression
-  pattern: createEventDispatcher($$$)

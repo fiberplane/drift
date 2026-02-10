@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
 
+import { Either } from "effect";
+
 import { runCommitCommand } from "../cli/commit.ts";
 import { runPlanCommand } from "../cli/plan.ts";
 import { loadProject, type DriftCellRecord } from "../cli/project-store.ts";
@@ -14,6 +16,7 @@ import {
   type DagCellSnapshot,
   type WsClient,
 } from "./ws.ts";
+import homepage from "../ui/index.html";
 
 export * from "./api.ts";
 export * from "./watcher.ts";
@@ -38,11 +41,11 @@ export const startDriftEditServer = (args: {
 
   const readDag = (): ReadonlyArray<DagCellSnapshot> => {
     const projectResult = loadProject(rootDir);
-    if (!projectResult.ok) {
+    if (Either.isLeft(projectResult)) {
       return [];
     }
 
-    return projectResult.value.cells.map(toDagCellSnapshot);
+    return projectResult.right.cells.map(toDagCellSnapshot);
   };
 
   const runAction = (request: ActionRequest): ActionResponse => {
@@ -165,6 +168,10 @@ export const startDriftEditServer = (args: {
   const server = Bun.serve({
     hostname: args.host,
     port: args.port,
+    development: true,
+    routes: {
+      "/": homepage,
+    },
     fetch: (request, serverRef) => {
       const url = new URL(request.url);
       if (url.pathname === "/ws") {
@@ -276,7 +283,12 @@ const toDagCellSnapshot = (cell: DriftCellRecord): DagCellSnapshot => ({
   dependencies: cell.dependencies,
   dependents: cell.dependents,
   state: cell.state,
+  content: cell.content,
   version: cell.version,
+  versions: cell.versions.map((version) => ({
+    version: version.version,
+    content: version.content,
+  })),
   artifactRef: cell.artifactRef,
   artifact: cell.artifact,
 });

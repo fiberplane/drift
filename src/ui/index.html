@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>drift edit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Instrument+Serif:ital@0;1&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&display=swap" rel="stylesheet" />
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html {
+        font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+        font-size: 15px;
+        -webkit-font-smoothing: antialiased;
+        background: #faf8f5;
+        color: #2c2825;
+      }
+      body { min-height: 100dvh; }
+      :root {
+        --bg-page: #faf8f5;
+        --bg-card: #ffffff;
+        --bg-inset: #f5f2ee;
+        --bg-wash: #edeae5;
+        --border-light: #e8e4de;
+        --border-mid: #d6d1ca;
+        --border-strong: #b8b2a8;
+        --text-body: #2c2825;
+        --text-secondary: #6b6560;
+        --text-tertiary: #9a948d;
+        --text-muted: #b5afa7;
+        --accent: #5c6bc0;
+        --accent-light: rgba(92,107,192,0.08);
+        --accent-border: rgba(92,107,192,0.25);
+        --clean: #4a8c6f;
+        --clean-bg: #eef6f1;
+        --clean-border: #c1dece;
+        --stale: #a08030;
+        --stale-bg: #fdf6e3;
+        --stale-border: #e8d9a8;
+        --running: #4a7fa5;
+        --running-bg: #edf4fa;
+        --running-border: #b8d4e8;
+        --error: #b85450;
+        --error-bg: #fdf0ef;
+        --error-border: #e8c1bf;
+        --font-display: "Instrument Serif", Georgia, serif;
+        --font-body: "Source Serif 4", Georgia, serif;
+        --font-mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, Menlo, monospace;
+        --radius-sm: 4px;
+        --radius-md: 8px;
+        --radius-lg: 10px;
+      }
+      @keyframes gentle-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.55; }
+      }
+    </style>
+    <script type="module" src="./src/entry.ts"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

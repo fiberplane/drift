@@ -50,12 +50,6 @@ export const createApiRouter =
   (request: Request): Response => {
     const url = new URL(request.url);
 
-    if (request.method === "GET" && url.pathname === "/") {
-      return textResponse(
-        "drift edit server is running. Use POST /api/cells/:cell/(plan|build|commit), GET /api/dag, and WebSocket /ws.",
-      );
-    }
-
     if (request.method === "GET" && url.pathname === "/health") {
       return jsonResponse({ ok: true });
     }
@@ -128,13 +122,5 @@ const jsonResponse = (body: unknown, status = 200): Response =>
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-    },
-  });
-
-const textResponse = (body: string, status = 200): Response =>
-  new Response(body, {
-    status,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
     },
   });

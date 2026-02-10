@@ -1,95 +1,179 @@
 <script lang="ts">
   import Notebook from "../lib/components/Notebook.svelte";
-  import { createInitialNotebook } from "../lib/state/index.ts";
-  import type { CellActionRequest, ToolbarActionRequest } from "../lib/types.ts";
+  import { getWsUrl, sendCellAction, type ConnectionStatus } from "../lib/api-client.ts";
+  import {
+    applyServerEvent,
+    createInitialNotebook,
+    listStaleCellIndexes,
+    listUncommittedCellIndexes,
+    setActiveCell,
+    updateCellInput,
+    selectCellVersion,
+    restoreCellVersion,
+  } from "../lib/state/index.ts";
+  import type {
+    CellActionRequest,
+    CellInputChange,
+    CellVersionRestoreRequest,
+    CellVersionSelectionChange,
+    ToolbarActionRequest,
+  } from "../lib/types.ts";
+  import type { WsServerEvent } from "../lib/state/ws.svelte.ts";
 
-  const initialModel = createInitialNotebook([
-    {
-      index: 0,
-      title: "Project constraints",
-      dependencies: [],
-      state: "clean",
-      input: "# Project\n\nDefine runtime and architecture constraints.",
-      output: {
-        summary: "Baseline constraints captured and synced to CLAUDE.md.",
-        commitRef: "a9227d52",
-      },
-    },
-    {
-      index: 1,
-      title: "Execution pipeline",
-      dependencies: [0],
-      state: "stale",
-      input: "# Execution pipeline\n\nDescribe how run/plan/commit should flow.",
-      output: null,
-    },
-  ]);
+  let notebook = $state(createInitialNotebook());
+  let status = $state<ConnectionStatus>("connecting");
+  let ws = $state<WebSocket | null>(null);
+  let reconnectTimer = $state<ReturnType<typeof setTimeout> | null>(null);
 
-  let actions = $state<string[]>([]);
+  const connect = (): void => {
+    status = "connecting";
+    const socket = new WebSocket(getWsUrl());
 
-  const appendAction = (message: string): void => {
-    actions = [message, ...actions].slice(0, 8);
+    socket.onopen = () => {
+      status = "connected";
+      ws = socket;
+    };
+
+    socket.onmessage = (event) => {
+      const parsed: WsServerEvent = JSON.parse(String(event.data));
+      notebook = applyServerEvent(notebook, parsed);
+    };
+
+    socket.onclose = () => {
+      status = "disconnected";
+      ws = null;
+      scheduleReconnect();
+    };
+
+    socket.onerror = () => {
+      // onclose will fire after this
+    };
   };
 
+  const scheduleReconnect = (): void => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+    }
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, 2000);
+  };
+
+  $effect(() => {
+    connect();
+    return () => {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+      }
+      if (ws !== null) {
+        ws.close();
+      }
+    };
+  });
+
   const handleCellAction = (request: CellActionRequest): void => {
-    appendAction(`cell ${request.cellIndex}: ${request.action}`);
+    if (ws !== null) {
+      sendCellAction(ws, request.action, request.cellIndex);
+    }
   };
 
   const handleToolbarAction = (request: ToolbarActionRequest): void => {
-    appendAction(`toolbar: ${request.action}`);
+    if (ws === null) return;
+
+    if (request.action === "plan-all") {
+      for (const cellIndex of listStaleCellIndexes(notebook)) {
+        sendCellAction(ws, "plan", cellIndex);
+      }
+    }
+    if (request.action === "build-all") {
+      for (const cellIndex of listStaleCellIndexes(notebook)) {
+        sendCellAction(ws, "build", cellIndex);
+      }
+    }
+    if (request.action === "commit-all") {
+      for (const cellIndex of listUncommittedCellIndexes(notebook)) {
+        sendCellAction(ws, "commit", cellIndex);
+      }
+    }
+  };
+
+  const handleCellInput = (change: CellInputChange): void => {
+    notebook = setActiveCell(notebook, change.cellIndex);
+    notebook = updateCellInput(notebook, change.cellIndex, change.value);
+  };
+
+  const handleMinimapSelect = (cellIndex: number): void => {
+    notebook = setActiveCell(notebook, cellIndex);
+  };
+
+  const handleVersionSelect = (change: CellVersionSelectionChange): void => {
+    notebook = setActiveCell(notebook, change.cellIndex);
+    notebook = selectCellVersion(notebook, change.cellIndex, change.version);
+  };
+
+  const handleVersionRestore = (request: CellVersionRestoreRequest): void => {
+    notebook = setActiveCell(notebook, request.cellIndex);
+    notebook = restoreCellVersion(notebook, request.cellIndex, request.version);
   };
 </script>
 
 <main>
-  <Notebook initialModel={initialModel} onCellAction={handleCellAction} onToolbarAction={handleToolbarAction} />
-
-  <section class="event-log">
-    <h2>Recent actions</h2>
-
-    {#if actions.length === 0}
-      <p>No actions yet.</p>
+  <div
+    class="status-bar"
+    class:connected={status === "connected"}
+    class:disconnected={status === "disconnected"}
+  >
+    {#if status === "connecting"}
+      Connecting to drift server…
+    {:else if status === "connected"}
+      Connected
     {:else}
-      <ul>
-        {#each actions as action, index (`${action}-${index}`)}
-          <li>{action}</li>
-        {/each}
-      </ul>
+      Disconnected — reconnecting…
     {/if}
-  </section>
+  </div>
+
+  <Notebook
+    model={notebook}
+    onCellAction={handleCellAction}
+    onToolbarAction={handleToolbarAction}
+    onCellInput={handleCellInput}
+    onMinimapSelect={handleMinimapSelect}
+    onVersionSelect={handleVersionSelect}
+    onVersionRestore={handleVersionRestore}
+  />
 </main>
 
 <style>
   main {
     display: grid;
-    gap: 1rem;
-    padding: 1rem;
+    gap: 0;
+    padding: 0;
+    min-height: 100dvh;
+    background: var(--bg-page);
   }
 
-  .event-log {
-    max-width: 62rem;
-    margin: 0 auto;
-    width: 100%;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.75rem;
-    padding: 0.75rem;
+  .status-bar {
+    text-align: center;
+    padding: 0.35rem 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 400;
+    letter-spacing: 0.03em;
+    background: var(--stale-bg);
+    color: var(--stale);
+    border-bottom: 1px solid var(--stale-border);
   }
 
-  h2 {
-    margin: 0;
-    font-size: 0.95rem;
+  .status-bar.connected {
+    background: var(--bg-page);
+    color: var(--text-muted);
+    border-bottom-color: var(--border-light);
   }
 
-  p {
-    margin: 0.5rem 0 0;
-    color: #6b7280;
-  }
-
-  ul {
-    margin: 0.5rem 0 0;
-    padding-left: 1.1rem;
-    display: grid;
-    gap: 0.2rem;
-    font-size: 0.85rem;
-    color: #374151;
+  .status-bar.disconnected {
+    background: var(--error-bg);
+    color: var(--error);
+    border-bottom-color: var(--error-border);
   }
 </style>

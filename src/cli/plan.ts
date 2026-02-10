@@ -1,5 +1,6 @@
+import { Either } from "effect";
+
 import { formatAgentError, resolveAgentSelection, streamAgentCall } from "../agent/index.ts";
-import { err, ok, type Result } from "../core/execution-engine.ts";
 import {
   createPlannedVersion,
   loadProject,
@@ -15,22 +16,22 @@ interface ParsedPlanArgs {
 
 export const runPlanCommand = (args: readonly string[], context: CliContext): number => {
   const parsed = parsePlanArgs(args);
-  if (!parsed.ok) {
-    context.writeError(parsed.error);
+  if (Either.isLeft(parsed)) {
+    context.writeError(parsed.left);
     return 1;
   }
 
   const projectResult = loadProject(context.cwd);
-  if (!projectResult.ok) {
-    printProjectError(context, projectResult.error);
+  if (Either.isLeft(projectResult)) {
+    printProjectError(context, projectResult.left);
     return 1;
   }
 
-  const project = projectResult.value;
+  const project = projectResult.right;
   const targets =
-    parsed.value.targetCell === null
+    parsed.right.targetCell === null
       ? project.cells.map((cell) => cell.index)
-      : [parsed.value.targetCell];
+      : [parsed.right.targetCell];
 
   if (targets.length === 0) {
     context.writeError("No cells available to plan.");
@@ -72,49 +73,49 @@ export const runPlanCommand = (args: readonly string[], context: CliContext): nu
       nowIso: context.now().toISOString(),
     });
 
-    if (!planResult.ok) {
-      printProjectError(context, planResult.error);
+    if (Either.isLeft(planResult)) {
+      printProjectError(context, planResult.left);
       return 1;
     }
 
     printCellPlanSummary({
       context,
       cell: sourceCell,
-      fromVersion: planResult.value.from,
-      toVersion: planResult.value.to,
+      fromVersion: planResult.right.from,
+      toVersion: planResult.right.to,
       backend: selection.backend,
       model: selection.model,
       tokens: streamedAgent.value,
     });
   }
 
-  if (parsed.value.targetCell === null) {
+  if (parsed.right.targetCell === null) {
     context.writeLine("");
     context.writeLine(`✅ Planned ${targets.length} cells.`);
   } else {
     context.writeLine("");
-    context.writeLine(`✅ Cell ${parsed.value.targetCell} planned. Review with drift edit.`);
+    context.writeLine(`✅ Cell ${parsed.right.targetCell} planned. Review with drift edit.`);
   }
 
   return 0;
 };
 
-const parsePlanArgs = (args: readonly string[]): Result<string, ParsedPlanArgs> => {
+const parsePlanArgs = (args: readonly string[]): Either.Either<ParsedPlanArgs, string> => {
   if (args.length > 1) {
-    return err("Usage: drift plan [cell]");
+    return Either.left("Usage: drift plan [cell]");
   }
 
   const first = args[0];
   if (first === undefined) {
-    return ok({ targetCell: null });
+    return Either.right({ targetCell: null });
   }
 
   const parsed = parseCellIndex(first);
   if (parsed === null) {
-    return err("Cell must be a non-negative number.");
+    return Either.left("Cell must be a non-negative number.");
   }
 
-  return ok({ targetCell: parsed });
+  return Either.right({ targetCell: parsed });
 };
 
 const printCellPlanSummary = (args: {

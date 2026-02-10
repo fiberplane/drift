@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { Either } from "effect";
+
 import { applyUnifiedDiff, summarizeUnifiedDiff } from "./diff.ts";
 
 const createTempDirectory = (): string => mkdtempSync(join(tmpdir(), "drift-diff-"));
@@ -37,10 +39,10 @@ describe("diff", () => {
       rawOutput: patch,
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.files).toEqual(["src/generated/new-file.ts"]);
-      expect(result.value.patch).toContain("--- /dev/null");
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isRight(result)) {
+      expect(result.right.files).toEqual(["src/generated/new-file.ts"]);
+      expect(result.right.patch).toContain("--- /dev/null");
     }
 
     const written = readFileSync(join(cwd, "src", "generated", "new-file.ts"), "utf8");
@@ -56,10 +58,10 @@ describe("diff", () => {
       rawOutput: "This is not a patch",
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error._tag).toBe("InvalidDiffError");
-      expect(result.error.cellIndex).toBe(7);
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left._tag).toBe("InvalidDiffError");
+      expect(result.left.cellIndex).toBe(7);
     }
   });
 
@@ -82,12 +84,12 @@ describe("diff", () => {
       rawOutput: patch,
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error._tag).toBe("DiffApplyError");
-      expect(result.error.cellIndex).toBe(4);
-      if (result.error._tag === "DiffApplyError") {
-        expect(result.error.stderr).toContain("Hunk does not match");
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left._tag).toBe("DiffApplyError");
+      expect(result.left.cellIndex).toBe(4);
+      if (result.left._tag === "DiffApplyError") {
+        expect(result.left.stderr).toContain("Hunk does not match");
       }
     }
 

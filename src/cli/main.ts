@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { runCli } from "./index.ts";
 import { createProcessContext } from "./types.ts";
 

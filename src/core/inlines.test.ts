@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Either } from "effect";
+
 import { parseInlines, resolveInlinesInContent } from "./inlines.ts";
 
 const tempDirs: string[] = [];
@@ -46,12 +48,12 @@ describe("inlines", () => {
       content: "cwd: !`pwd`",
     });
 
-    expect(result.ok).toBeTrue();
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBeTrue();
+    if (Either.isLeft(result)) {
       return;
     }
 
-    expect(result.value).toContain(projectRoot);
+    expect(result.right).toContain(projectRoot);
   });
 
   test("resolveInlinesInContent returns InlineCommandError on non-zero exits", () => {
@@ -63,15 +65,15 @@ describe("inlines", () => {
       content: "!`echo boom 1>&2; exit 7`",
     });
 
-    expect(result.ok).toBeFalse();
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBeTrue();
+    if (Either.isRight(result)) {
       return;
     }
 
-    expect(result.error._tag).toBe("InlineCommandError");
-    expect(result.error.cellIndex).toBe(5);
-    expect(result.error.command).toBe("echo boom 1>&2; exit 7");
-    expect(result.error.exitCode).toBe(7);
-    expect(result.error.stderr).toContain("boom");
+    expect(result.left._tag).toBe("InlineCommandError");
+    expect(result.left.cellIndex).toBe(5);
+    expect(result.left.command).toBe("echo boom 1>&2; exit 7");
+    expect(result.left.exitCode).toBe(7);
+    expect(result.left.stderr).toContain("boom");
   });
 });

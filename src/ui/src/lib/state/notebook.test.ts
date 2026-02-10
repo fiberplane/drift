@@ -1,23 +1,41 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  appendCellLiveToken,
   createInitialNotebook,
   createToolbarState,
+  getCellDisplayedInput,
   isCellCommitReady,
+  restoreCellVersion,
   setCellOutput,
   setCellState,
+  startCellLiveOutput,
+  stepCellVersion,
   updateCellInput,
 } from "./notebook.ts";
 import type { UiCell } from "../types.ts";
 
-const createCell = (index: number, overrides: Partial<UiCell> = {}): UiCell => ({
-  index,
-  title: overrides.title ?? `Cell ${index}`,
-  dependencies: overrides.dependencies ?? [],
-  state: overrides.state ?? "stale",
-  input: overrides.input ?? `# Cell ${index}`,
-  output: overrides.output ?? null,
-});
+const createCell = (index: number, overrides: Partial<UiCell> = {}): UiCell => {
+  const input = overrides.input ?? `# Cell ${index}`;
+
+  return {
+    index,
+    title: overrides.title ?? `Cell ${index}`,
+    dependencies: overrides.dependencies ?? [],
+    dependents: overrides.dependents ?? [],
+    state: overrides.state ?? "stale",
+    input,
+    output: overrides.output ?? null,
+    liveOutput: overrides.liveOutput ?? null,
+    versions: overrides.versions ?? [
+      {
+        version: 1,
+        content: input,
+      },
+    ],
+    selectedVersion: overrides.selectedVersion ?? null,
+  };
+};
 
 describe("ui notebook state", () => {
   test("createInitialNotebook sets activeCell to the first cell", () => {
@@ -33,6 +51,7 @@ describe("ui notebook state", () => {
         state: "clean",
         output: {
           summary: "already built",
+          patch: "diff --git a/a.ts b/a.ts",
           commitRef: null,
         },
       }),
@@ -43,12 +62,14 @@ describe("ui notebook state", () => {
 
     expect(cell?.input).toBe("# Updated content");
     expect(cell?.state).toBe("stale");
+    expect(cell?.output).toBeNull();
   });
 
   test("setCellOutput promotes cell to clean and stores summary", () => {
     const notebook = createInitialNotebook([createCell(2)]);
     const updated = setCellOutput(notebook, 2, {
       summary: "Build done",
+      patch: "diff --git a/a.ts b/a.ts",
       commitRef: null,
     });
 
@@ -64,6 +85,7 @@ describe("ui notebook state", () => {
         state: "clean",
         output: {
           summary: "committed",
+          patch: "",
           commitRef: "abc123",
         },
       }),
@@ -74,6 +96,7 @@ describe("ui notebook state", () => {
         state: "clean",
         output: {
           summary: "ready to commit",
+          patch: "",
           commitRef: null,
         },
       }),
@@ -92,6 +115,7 @@ describe("ui notebook state", () => {
       state: "clean",
       output: {
         summary: "summary",
+        patch: "",
         commitRef: null,
       },
     });
@@ -101,5 +125,54 @@ describe("ui notebook state", () => {
     expect(isCellCommitReady(eligible)).toBe(true);
     expect(isCellCommitReady(createCell(5))).toBe(false);
     expect(isCellCommitReady(running ?? createCell(6))).toBe(false);
+  });
+
+  test("startCellLiveOutput and appendCellLiveToken build a streaming transcript", () => {
+    const notebook = createInitialNotebook([createCell(0)]);
+
+    const withStream = startCellLiveOutput(notebook, 0, "build");
+    const withFirstToken = appendCellLiveToken(withStream, 0, "diff --git ");
+    const withSecondToken = appendCellLiveToken(withFirstToken, 0, "a/src/app.ts b/src/app.ts\n");
+
+    expect(withSecondToken.cells[0]?.state).toBe("running");
+    expect(withSecondToken.cells[0]?.liveOutput?.content).toBe(
+      "diff --git a/src/app.ts b/src/app.ts\n",
+    );
+  });
+
+  test("stepCellVersion browses history and restoreCellVersion creates rollback snapshots", () => {
+    const notebook = createInitialNotebook([
+      createCell(1, {
+        input: "# Current",
+        versions: [
+          {
+            version: 1,
+            content: "# v1",
+          },
+          {
+            version: 2,
+            content: "# v2",
+          },
+          {
+            version: 3,
+            content: "# Current",
+          },
+        ],
+      }),
+    ]);
+
+    const browsing = stepCellVersion(notebook, 1, -1);
+    expect(browsing.cells[0]?.selectedVersion).toBe(2);
+    expect(getCellDisplayedInput(browsing.cells[0] ?? createCell(1))).toBe("# v2");
+
+    const restored = restoreCellVersion(browsing, 1, 2);
+    const cell = restored.cells[0];
+
+    expect(cell?.selectedVersion).toBeNull();
+    expect(cell?.input).toBe("# v2");
+    expect(cell?.state).toBe("stale");
+    expect(cell?.versions.map((version) => version.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(cell?.versions[3]?.content).toBe("# Current");
+    expect(cell?.versions[4]?.content).toBe("# v2");
   });
 });

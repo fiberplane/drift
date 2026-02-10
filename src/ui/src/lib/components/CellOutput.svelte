@@ -1,22 +1,30 @@
 <script lang="ts">
+  import Comments from "./Comments.svelte";
+  import DiffView from "./DiffView.svelte";
+  import Summary from "./Summary.svelte";
+
   interface Props {
     readonly summary: string | null;
+    readonly patch: string | null;
     readonly commitRef?: string | null;
+    readonly diffComments?: ReadonlyArray<string>;
   }
 
-  let { summary, commitRef = null }: Props = $props();
+  let { summary, patch, commitRef = null, diffComments = [] }: Props = $props();
 
   const hasSummary = $derived(summary !== null && summary.trim() !== "");
-  const hasWarning = $derived(summary?.toLowerCase().includes("warning") ?? false);
 </script>
 
 <section class="cell-output" aria-live="polite">
   {#if hasSummary}
-    <h3>Summary</h3>
-    <pre class:warning={hasWarning}>{summary}</pre>
+    <Summary text={summary ?? ""} />
   {:else}
     <p class="empty">Build output will appear here after the first successful build.</p>
   {/if}
+
+  <DiffView {patch} />
+
+  <Comments comments={diffComments} />
 
   {#if commitRef !== null}
     <p class="commit-ref">
@@ -28,49 +36,34 @@
 <style>
   .cell-output {
     display: grid;
-    gap: 0.4rem;
-    padding: 0.75rem;
-    border-radius: 0.65rem;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-  }
-
-  h3 {
-    margin: 0;
-    font-size: 0.86rem;
-    color: #374151;
-  }
-
-  pre {
-    margin: 0;
-    white-space: pre-wrap;
-    font-size: 0.82rem;
-    line-height: 1.4;
-    color: #1f2937;
-  }
-
-  pre.warning {
-    color: #92400e;
+    gap: 0.5rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-light);
   }
 
   .empty {
     margin: 0;
-    color: #6b7280;
+    color: var(--text-muted);
     font-size: 0.82rem;
+    font-style: italic;
   }
 
   .commit-ref {
     margin: 0;
-    font-size: 0.8rem;
-    color: #374151;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
   }
 
   code {
-    font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
-    font-size: 0.8rem;
-    background: #fff;
-    border: 1px solid #d1d5db;
-    border-radius: 0.4rem;
-    padding: 0.1rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    font-weight: 500;
+    background: var(--bg-card);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-sm);
+    padding: 0.08rem 0.3rem;
+    color: var(--clean);
   }
 </style>

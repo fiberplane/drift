@@ -1,0 +1,11 @@
+ruleDirs:
+  - rules
+testConfigs:
+  - testDir: tests
+languageGlobs:
+  typescript:
+    - "**/*.svelte.ts"
+  javascript:
+    - "**/*.svelte.js"
+  html:
+    - "**/*.svelte"

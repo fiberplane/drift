@@ -1,7 +1,0 @@
-id: no-on-mount
-language: typescript
-message: Use $effect() cleanup instead of onMount/onDestroy
-severity: warning
-rule:
-  kind: import_statement
-  regex: \{[^}]*\b(onMount|onDestroy)\b[^}]*\}\s+from\s+["']svelte["']

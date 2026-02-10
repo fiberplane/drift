@@ -1,3 +1,5 @@
+import { Either } from "effect";
+
 import type { VcsBackendPreference } from "../core/vcs.ts";
 
 export interface CliDependencies {
@@ -7,15 +9,7 @@ export interface CliDependencies {
     readonly files: readonly string[];
     readonly message: string;
     readonly cellIndices: readonly number[];
-  }) =>
-    | {
-        readonly ok: true;
-        readonly ref: string;
-      }
-    | {
-        readonly ok: false;
-        readonly message: string;
-      };
+  }) => Either.Either<{ readonly ref: string }, { readonly message: string }>;
   readonly startEditServer: (args: { readonly host: string; readonly port: number }) => {
     readonly host: string;
     readonly port: number;

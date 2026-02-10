@@ -99,10 +99,14 @@ Run tests:
 bun test
 ```
 
-Run lint/format/type checks:
+Run guardrails/lint/format/type checks:
 
 ```bash
+bun run lint:ast-grep:test
+bun run lint:ast-grep
+bun run lint:effect
 bun run lint
 bun run format:check
 bun run typecheck
+bun run check
 ```

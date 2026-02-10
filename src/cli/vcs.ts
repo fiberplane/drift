@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
 
+import { Either } from "effect";
+
 import { commitWithVcs, type VcsCommand, type VcsCommandResult } from "../core/vcs.ts";
 import type { CliDependencies } from "./types.ts";
 
@@ -35,17 +37,15 @@ export const commitFilesWithDetectedVcs: CliDependencies["commitFiles"] = (args)
     },
   );
 
-  if (!commitResult.ok) {
-    return {
-      ok: false,
-      message: commitResult.error.stderr,
-    };
+  if (Either.isLeft(commitResult)) {
+    return Either.left({
+      message: commitResult.left.stderr,
+    });
   }
 
-  return {
-    ok: true,
-    ref: commitResult.ref,
-  };
+  return Either.right({
+    ref: commitResult.right.ref,
+  });
 };
 
 export const startPlaceholderEditServer: CliDependencies["startEditServer"] = (args) => {

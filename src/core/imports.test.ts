@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Either } from "effect";
+
 import { parseImports, resolveImportsInContent } from "./imports.ts";
 
 const tempDirs: string[] = [];
@@ -96,20 +98,20 @@ describe("imports", () => {
       content,
     });
 
-    expect(result.ok).toBeTrue();
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBeTrue();
+    if (Either.isLeft(result)) {
       return;
     }
 
-    const firstAIndex = result.value.indexOf('<file path="src/a.ts">');
-    const firstBIndex = result.value.indexOf('<file path="src/b.ts">');
-    const firstTypesIndex = result.value.indexOf('<file path="src/types.ts">');
+    const firstAIndex = result.right.indexOf('<file path="src/a.ts">');
+    const firstBIndex = result.right.indexOf('<file path="src/b.ts">');
+    const firstTypesIndex = result.right.indexOf('<file path="src/types.ts">');
 
     expect(firstAIndex).toBeLessThan(firstBIndex);
     expect(firstBIndex).toBeLessThan(firstTypesIndex);
 
-    expect(result.value).toContain("export const second = 2;\nexport const third = 3;");
-    expect(result.value).toContain("export interface UserInterface {");
+    expect(result.right).toContain("export const second = 2;\nexport const third = 3;");
+    expect(result.right).toContain("export interface UserInterface {");
   });
 
   test("resolveImportsInContent ignores fenced references and fails on unresolved imports", () => {
@@ -126,13 +128,13 @@ describe("imports", () => {
       content,
     });
 
-    expect(result.ok).toBeFalse();
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBeTrue();
+    if (Either.isRight(result)) {
       return;
     }
 
-    expect(result.error._tag).toBe("ImportNotFoundError");
-    expect(result.error.cellIndex).toBe(9);
-    expect(result.error.importRef).toBe("@./src/also-missing.ts");
+    expect(result.left._tag).toBe("ImportNotFoundError");
+    expect(result.left.cellIndex).toBe(9);
+    expect(result.left.importRef).toBe("@./src/also-missing.ts");
   });
 });

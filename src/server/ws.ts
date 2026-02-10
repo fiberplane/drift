@@ -1,13 +1,20 @@
 import type { BuildArtifact, CellState } from "../core/execution-engine.ts";
 import type { ActionRequest, ServerAction } from "./api.ts";
 
+export interface DagCellVersionSnapshot {
+  readonly version: number;
+  readonly content: string;
+}
+
 export interface DagCellSnapshot {
   readonly index: number;
   readonly title: string;
   readonly dependencies: ReadonlyArray<number>;
   readonly dependents: ReadonlyArray<number>;
   readonly state: CellState;
+  readonly content: string;
   readonly version: number;
+  readonly versions: ReadonlyArray<DagCellVersionSnapshot>;
   readonly artifactRef: string | null;
   readonly artifact: BuildArtifact | null;
 }

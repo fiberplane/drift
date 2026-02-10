@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 
+import { Either } from "effect";
+
 import { assembleProjectMarkdown, loadProject, type ProjectError } from "./project-store.ts";
 import type { CliContext } from "./types.ts";
 
@@ -12,12 +14,12 @@ export const runAssembleCommand = (args: readonly string[], context: CliContext)
   }
 
   const projectResult = loadProject(context.cwd);
-  if (!projectResult.ok) {
-    printProjectError(context, projectResult.error);
+  if (Either.isLeft(projectResult)) {
+    printProjectError(context, projectResult.left);
     return 1;
   }
 
-  const markdown = assembleProjectMarkdown(projectResult.value);
+  const markdown = assembleProjectMarkdown(projectResult.right);
   if (parsed.value.outputPath === null) {
     context.writeLine(markdown.trimEnd());
     return 0;

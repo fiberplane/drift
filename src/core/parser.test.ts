@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { Either } from "effect";
+
 import { parseProjectMarkdown } from "./parser.ts";
 
 describe("parser", () => {
@@ -33,16 +35,16 @@ describe("parser", () => {
 
     const result = parseProjectMarkdown(markdown);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isLeft(result)) {
       return;
     }
 
-    expect(result.value.config.agent).toBe("pi");
-    expect(result.value.cells).toHaveLength(2);
+    expect(result.right.config.agent).toBe("pi");
+    expect(result.right.cells).toHaveLength(2);
 
-    const rootCell = result.value.cells[0];
-    const featureCell = result.value.cells[1];
+    const rootCell = result.right.cells[0];
+    const featureCell = result.right.cells[1];
 
     expect(rootCell?.index).toBe(0);
     expect(rootCell?.dependencies).toEqual([]);
@@ -66,13 +68,13 @@ describe("parser", () => {
 
     const result = parseProjectMarkdown(markdown);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isRight(result)) {
       return;
     }
 
-    expect(result.error._tag).toBe("ParseMarkdownError");
-    expect(result.error.message).toContain("Missing closing frontmatter separator");
+    expect(result.left._tag).toBe("ParseMarkdownError");
+    expect(result.left.message).toContain("Missing closing frontmatter separator");
   });
 
   test("parseProjectMarkdown returns ParseMarkdownError for invalid per-cell agent metadata", () => {
@@ -88,14 +90,14 @@ describe("parser", () => {
 
     const result = parseProjectMarkdown(markdown);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isRight(result)) {
       return;
     }
 
-    expect(result.error._tag).toBe("ParseMarkdownError");
-    if (result.error._tag === "ParseMarkdownError") {
-      expect(result.error.cellIndex).toBe(0);
+    expect(result.left._tag).toBe("ParseMarkdownError");
+    if (result.left._tag === "ParseMarkdownError") {
+      expect(result.left.cellIndex).toBe(0);
     }
   });
 });

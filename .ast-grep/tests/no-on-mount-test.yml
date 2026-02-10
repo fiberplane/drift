@@ -1,0 +1,14 @@
+id: no-on-mount
+valid:
+  - |
+    <script lang="ts">
+      $effect(() => {
+        return () => {}
+      })
+    </script>
+invalid:
+  - |
+    <script lang="ts">
+      import { onMount } from "svelte"
+      onMount(() => {})
+    </script>

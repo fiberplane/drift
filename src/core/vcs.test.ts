@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { Either } from "effect";
+
 import {
   commitWithVcs,
   detectDrift,
@@ -103,10 +105,10 @@ vcs:
       },
     );
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.backend).toBe("git");
-      expect(result.ref).toBe("abc123");
+    expect(Either.isRight(result)).toBe(true);
+    if (Either.isRight(result)) {
+      expect(result.right.backend).toBe("git");
+      expect(result.right.ref).toBe("abc123");
     }
 
     expect(harness.calls.map((call) => call.cmd)).toEqual([
@@ -144,11 +146,11 @@ vcs:
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error._tag).toBe("VcsCommitError");
-      expect(result.error.cellIndices).toEqual([1, 2]);
-      expect(result.error.stderr).toBe("nothing to commit");
+    expect(Either.isLeft(result)).toBe(true);
+    if (Either.isLeft(result)) {
+      expect(result.left._tag).toBe("VcsCommitError");
+      expect(result.left.cellIndices).toEqual([1, 2]);
+      expect(result.left.stderr).toBe("nothing to commit");
     }
   });
 
