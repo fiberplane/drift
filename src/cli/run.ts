@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { formatAgentError, resolveAgentSelection, streamAgentCall } from "../agent/index.ts";
 import {
   err,
   ok,
@@ -160,7 +161,32 @@ const createBuildCallbacks = (args: {
         });
       }
 
+      const selection = resolveAgentSelection({
+        configRaw: args.project.configRaw,
+        cellContent: sourceCell.content,
+      });
+
+      const streamedAgent = streamAgentCall({
+        request: {
+          cellIndex: sourceCell.index,
+          call: "build",
+          prompt: sourceCell.content,
+          backend: selection.backend,
+          model: selection.model,
+        },
+      });
+
+      if (!streamedAgent.ok) {
+        return err({
+          tag: "agent-error",
+          cellIndex: sourceCell.index,
+          message: formatAgentError(streamedAgent.error),
+        });
+      }
+
       if (args.stream) {
+        const modelLabel = selection.model === null ? "" : ` (${selection.model})`;
+
         args.context.writeLine("");
         args.context.writeLine(`▶ Cell ${sourceCell.index}: ${sourceCell.title}`);
         args.context.writeLine(
@@ -170,7 +196,12 @@ const createBuildCallbacks = (args: {
               : formatIndexList(sourceCell.dependencies)
           }`,
         );
-        args.context.writeLine("  ├─ Agent: scaffold");
+        args.context.writeLine(`  ├─ Agent: ${selection.backend}${modelLabel}`);
+
+        for (const token of streamedAgent.value) {
+          args.context.writeLine(`  │  ${token}`);
+        }
+
         args.context.writeLine("  │");
       }
 

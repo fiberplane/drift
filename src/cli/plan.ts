@@ -1,3 +1,4 @@
+import { formatAgentError, resolveAgentSelection, streamAgentCall } from "../agent/index.ts";
 import { err, ok, type Result } from "../core/execution-engine.ts";
 import {
   createPlannedVersion,
@@ -43,6 +44,28 @@ export const runPlanCommand = (args: readonly string[], context: CliContext): nu
       return 1;
     }
 
+    const selection = resolveAgentSelection({
+      configRaw: project.configRaw,
+      cellContent: sourceCell.content,
+    });
+
+    const streamedAgent = streamAgentCall({
+      request: {
+        cellIndex,
+        call: "plan",
+        prompt: sourceCell.content,
+        backend: selection.backend,
+        model: selection.model,
+      },
+    });
+
+    if (!streamedAgent.ok) {
+      context.writeError(
+        `Cell ${cellIndex} failed (agent-error): ${formatAgentError(streamedAgent.error)}`,
+      );
+      return 1;
+    }
+
     const planResult = createPlannedVersion({
       project,
       cellIndex,
@@ -59,6 +82,9 @@ export const runPlanCommand = (args: readonly string[], context: CliContext): nu
       cell: sourceCell,
       fromVersion: planResult.value.from,
       toVersion: planResult.value.to,
+      backend: selection.backend,
+      model: selection.model,
+      tokens: streamedAgent.value,
     });
   }
 
@@ -96,7 +122,12 @@ const printCellPlanSummary = (args: {
   readonly cell: DriftCellRecord;
   readonly fromVersion: number;
   readonly toVersion: number;
+  readonly backend: string;
+  readonly model: string | null;
+  readonly tokens: ReadonlyArray<string>;
 }): void => {
+  const modelLabel = args.model === null ? "" : ` (${args.model})`;
+
   args.context.writeLine(
     `⟐ Cell ${args.cell.index}: ${args.cell.title} (v${args.fromVersion} → v${args.toVersion})`,
   );
@@ -105,6 +136,12 @@ const printCellPlanSummary = (args: {
       args.cell.dependencies.length === 0 ? "(none)" : formatIndexList(args.cell.dependencies)
     }`,
   );
+  args.context.writeLine(`  ├─ Agent: ${args.backend}${modelLabel}`);
+
+  for (const token of args.tokens) {
+    args.context.writeLine(`  │  ${token}`);
+  }
+
   args.context.writeLine(
     "  └─ Expanded: added concrete implementation notes, edge cases, and follow-up tasks.",
   );
