@@ -52,6 +52,16 @@ export class DriftDetectedError extends Data.TaggedError("DriftDetectedError")<{
   readonly files: ReadonlyArray<string>;
 }> {}
 
+export class LoadProjectError extends Data.TaggedError("LoadProjectError")<{
+  readonly path: string;
+  readonly message: string;
+}> {}
+
+export class ParseMarkdownError extends Data.TaggedError("ParseMarkdownError")<{
+  readonly message: string;
+  readonly cellIndex: number | null;
+}> {}
+
 export type DriftError =
   | DagCycleError
   | InvalidDiffError
@@ -61,4 +71,6 @@ export type DriftError =
   | ImportNotFoundError
   | InlineCommandError
   | VcsCommitError
-  | DriftDetectedError;
+  | DriftDetectedError
+  | LoadProjectError
+  | ParseMarkdownError;

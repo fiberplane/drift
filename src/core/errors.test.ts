@@ -9,6 +9,8 @@ import {
   ImportNotFoundError,
   InlineCommandError,
   InvalidDiffError,
+  LoadProjectError,
+  ParseMarkdownError,
   VcsCommitError,
 } from "./errors.ts";
 
@@ -53,6 +55,14 @@ describe("errors", () => {
       cellIndex: 5,
       files: ["src/core/schemas.ts"],
     });
+    const loadProjectError = new LoadProjectError({
+      path: ".drift/config.yaml",
+      message: "Invalid config",
+    });
+    const parseMarkdownError = new ParseMarkdownError({
+      message: "Missing frontmatter",
+      cellIndex: null,
+    });
 
     expect(dagCycleError._tag).toBe("DagCycleError");
     expect(invalidDiffError._tag).toBe("InvalidDiffError");
@@ -63,6 +73,8 @@ describe("errors", () => {
     expect(inlineCommandError._tag).toBe("InlineCommandError");
     expect(vcsCommitError._tag).toBe("VcsCommitError");
     expect(driftDetectedError._tag).toBe("DriftDetectedError");
+    expect(loadProjectError._tag).toBe("LoadProjectError");
+    expect(parseMarkdownError._tag).toBe("ParseMarkdownError");
     expect(ancestorFailedError.cause._tag).toBe("AgentError");
   });
 });
