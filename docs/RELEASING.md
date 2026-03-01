@@ -1,7 +1,7 @@
 ---
 drift:
   files:
-    - .github/workflows/release.yml
+    - .github/workflows/release.yml@kznzovvs
 ---
 
 # Releasing

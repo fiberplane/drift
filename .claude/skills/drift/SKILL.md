@@ -3,10 +3,10 @@ name: drift
 description: Drift spec-to-code binding conventions. Use when editing code that is bound by drift specs, updating specs, working with drift frontmatter, or when drift lint reports stale bindings.
 drift:
   files:
-    - src/main.zig
-    - src/frontmatter.zig
-    - src/scanner.zig
-    - src/vcs.zig
+    - src/main.zig@kznzovvs
+    - src/frontmatter.zig@kznzovvs
+    - src/scanner.zig@kznzovvs
+    - src/vcs.zig@kznzovvs
 ---
 
 # Drift

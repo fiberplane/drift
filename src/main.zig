@@ -285,7 +285,7 @@ fn checkBinding(
 
     // Content-based staleness check when provenance is present
     if (provenance) |prov| {
-        return checkBindingByContent(allocator, cwd_path, binding, file_path, symbol_name, prov, detected_vcs);
+        return checkBindingByContent(allocator, cwd_path, binding, file_path, symbol_name, prov, spec_commit, detected_vcs);
     }
 
     // No provenance: use VCS history-based check
@@ -314,10 +314,19 @@ fn checkBindingByContent(
     file_path: []const u8,
     symbol_name: ?[]const u8,
     provenance: []const u8,
+    spec_commit: ?[]const u8,
     detected_vcs: vcs.VcsKind,
 ) !BindingStatus {
-    // Get historical content at provenance revision
-    const historical_content = vcs.getFileAtRevision(allocator, cwd_path, provenance, file_path, detected_vcs) catch null;
+    // Get historical content at provenance revision.
+    // Fall back to spec's last commit if provenance is unresolvable (e.g. jj change ID in git-only CI).
+    const historical_content = blk: {
+        const from_prov = vcs.getFileAtRevision(allocator, cwd_path, provenance, file_path, detected_vcs) catch null;
+        if (from_prov) |content| break :blk content;
+        if (spec_commit) |sc| {
+            break :blk vcs.getFileAtRevision(allocator, cwd_path, sc, file_path, detected_vcs) catch null;
+        }
+        break :blk null;
+    };
     defer if (historical_content) |hc| allocator.free(hc);
 
     // Read current file from disk
@@ -331,7 +340,6 @@ fn checkBindingByContent(
     defer allocator.free(current_content);
 
     if (historical_content == null) {
-        // File didn't exist at provenance revision
         return .{
             .label = try allocator.dupe(u8, "STALE"),
             .display = binding,
