@@ -1,8 +1,7 @@
----
-drift:
+<!-- drift:
   files:
     - src/main.zig@kznzovvs
----
+-->
 
 # drift
 
