@@ -1,6 +1,0 @@
-id: no-throw
-language: typescript
-message: Use Effect.fail(new TaggedError(...)) instead of throw
-severity: error
-rule:
-  kind: throw_statement

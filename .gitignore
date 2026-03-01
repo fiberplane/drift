@@ -1,5 +1,8 @@
-# Dependencies
-node_modules/
+# Zig build artifacts
+zig-out/
+zig-cache/
+.zig-cache/
+zig-pkg/
 
 # Fiberplane local issue tracking
 .fp/

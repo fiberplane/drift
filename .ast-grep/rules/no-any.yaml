@@ -1,7 +1,0 @@
-id: no-any
-language: typescript
-message: Use unknown and decode through Schema instead of any
-severity: error
-rule:
-  kind: predefined_type
-  regex: ^any$

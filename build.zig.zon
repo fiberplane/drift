@@ -1,0 +1,54 @@
+.{
+    .name = .drift,
+    .version = "0.1.0",
+    .fingerprint = 0x486fc72c7a030a48,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "test",
+        "tests.zig",
+        "queries",
+        "vendor",
+    },
+    .dependencies = .{
+        // CLI argument parsing (0.11.0, compatible with zig 0.15+)
+        .clap = .{
+            .url = "git+https://github.com/Hejsil/zig-clap#5289e0753cd274d65344bef1c114284c633536ea",
+            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
+        },
+
+        // Grammars — lazy loaded, compiled only when needed
+        .tree_sitter_typescript = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-typescript#v0.23.2",
+            .hash = "N-V-__8AALhpIQFpocCrfuYTb_Vzvxj3QG0T-yqi9x1QNRNM",
+            .lazy = true,
+        },
+        .tree_sitter_python = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-python#v0.23.6",
+            .hash = "N-V-__8AAB-iPgCkalcM0Ep6Ru2Um0D3T38-k3fWL4sDd7lE",
+            .lazy = true,
+        },
+        .tree_sitter_rust = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-rust#v0.24.0",
+            .hash = "N-V-__8AAItxbQDcrvshXYdPUV9STG6PaJyk2DZb-uBzQjlw",
+            .lazy = true,
+        },
+        .tree_sitter_go = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-go#v0.23.4",
+            .hash = "N-V-__8AAByNIQDR0efQX7qy2pZDQwNjFUwLmncLFdNdjQzm",
+            .lazy = true,
+        },
+        .tree_sitter_zig = .{
+            .url = "git+https://github.com/tree-sitter-grammars/tree-sitter-zig#v1.1.1",
+            .hash = "N-V-__8AAN6NXgCs6cZqnwFtVAD0jq66ZqKHuSRhVuPA6rvo",
+            .lazy = true,
+        },
+        .tree_sitter_java = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-java#v0.23.5",
+            .hash = "N-V-__8AABzeLgA7t_QWhWcrSnR4kOonfpr41QOXvsiuAyhW",
+            .lazy = true,
+        },
+    },
+}

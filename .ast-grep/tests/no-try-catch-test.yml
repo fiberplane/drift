@@ -1,7 +1,0 @@
-id: no-try-catch
-valid:
-  - |
-    const safe = 1
-invalid:
-  - |
-    try { doWork() } catch (error) { handleError(error) }

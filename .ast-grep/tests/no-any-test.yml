@@ -1,7 +1,0 @@
-id: no-any
-valid:
-  - |
-    const value: unknown = 1
-invalid:
-  - |
-    const value: any = 1

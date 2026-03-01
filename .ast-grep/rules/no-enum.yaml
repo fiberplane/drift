@@ -1,6 +1,0 @@
-id: no-enum
-language: typescript
-message: Use Schema.Literal or as const unions instead of enum
-severity: error
-rule:
-  kind: enum_declaration

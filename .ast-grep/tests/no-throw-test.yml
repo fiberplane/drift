@@ -1,7 +1,0 @@
-id: no-throw
-valid:
-  - |
-    const message = "no throw"
-invalid:
-  - |
-    throw new Error("boom")

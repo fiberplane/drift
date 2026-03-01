@@ -1,6 +1,0 @@
-id: no-default-export
-language: typescript
-message: Use named exports. Default exports are only allowed in .svelte files.
-severity: warning
-rule:
-  pattern: export default $VALUE

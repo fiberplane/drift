@@ -1,6 +1,0 @@
-id: no-try-catch
-language: typescript
-message: Use Effect.tryPromise or Effect.catchTag instead of try/catch
-severity: error
-rule:
-  kind: try_statement

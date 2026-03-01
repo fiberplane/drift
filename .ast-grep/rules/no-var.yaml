@@ -1,7 +1,0 @@
-id: no-var
-language: typescript
-message: Use const or let instead of var
-severity: error
-rule:
-  kind: variable_declaration
-  regex: ^var\b

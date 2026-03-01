@@ -1,9 +1,0 @@
-id: no-type-assertion
-language: typescript
-message: Decode or refine through Schema instead of using type assertions
-severity: warning
-rule:
-  all:
-    - kind: as_expression
-    - not:
-        pattern: $EXPR as const

@@ -1,7 +1,0 @@
-id: no-require
-language: typescript
-message: Use ESM import instead of require()
-severity: error
-rule:
-  kind: call_expression
-  pattern: require($$$)

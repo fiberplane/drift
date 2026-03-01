@@ -4,61 +4,62 @@
 
 ## Stack
 
-- Runtime: Bun
-- Language: TypeScript (strict, ESM only)
-- Core: Effect ecosystem (`effect`, `@effect/schema`, `@effect/platform`)
-- Frontend: SvelteKit with Svelte 5 runes
-- No default exports except Svelte components
+- Language: Zig 0.15.2
+- C interop: tree-sitter (vendor/tree-sitter + vendor/zig-tree-sitter, parsed on demand)
+- Grammars: lazy zig build deps (not vendored)
+- CLI: zig-clap 0.11.0
+- VCS: shell out to git/jj (no libgit2)
+- Hashing: std.hash.XxHash3 for content comparison
 
-## Effect Patterns
+## Architecture
 
-### Always
+drift binds markdown specs to code and lints for staleness. No daemon, no index, no cache. Every `drift lint` run is stateless: read specs, parse referenced files on demand, hash symbols, query VCS, report.
 
-- `Effect.gen(function*() { ... })` for effectful code (generator syntax, not pipe chains)
-- `yield*` inside generators, never `await`
-- Tagged errors via `Data.TaggedError` for failure cases (no string errors)
-- `Schema.Struct`, `Schema.Literal`, etc. for data shapes (no handwritten interfaces for data payloads)
-- `Schema.decode` / `Schema.encode` for parsing and serialization
-- `Effect.tryPromise` to wrap unavoidable Promise-based APIs (e.g. `fetch`)
-- Services via `Context.Tag` + `Layer` (no module-level singletons)
-- `readonly` on arrays, records, and fields by default
-- `Effect.acquireRelease` for resource/resource-lifecycle management
+Reference: docs/DESIGN.md, docs/DECISIONS.md, docs/CLI.md
 
-### Never
+## Zig Conventions
 
-- `Promise` or `async/await` in application code (wrap in Effect)
-- `try/catch` (use `Effect.catchTag` / `Effect.catchAll`)
-- `throw` (use `Effect.fail(new SomeTaggedError({ ... }))`)
-- `any` type (use `unknown` and decode through Schema)
-- `as` assertions (decode/refine instead; `as const` is okay)
-- `enum` (use `Schema.Literal` or `as const` unions)
-- `namespace` or `require()`
-- `console.log` (use `Effect.log` / `Effect.logDebug`)
+- Arena allocator per command lifecycle
+- DebugAllocator in Debug builds for leak detection
+- File-is-the-struct pattern (Ghostty convention)
+- Every `try alloc` except the last needs `errdefer free`
+- No `anyerror` in public APIs — explicit error sets
+- `zig fmt` enforced
+- All tests use `std.testing.allocator`
 
-## Svelte 5 Patterns
+## Code Patterns
 
-### Always
+- Explicit error sets, no `anyerror` in public signatures
+- Tagged unions for VCS dispatch (Git | Jj)
+- Comptime string maps for language detection (extension → grammar)
+- Shell out for VCS operations via `std.process.Child`
+- Tree-sitter queries loaded from `queries/<language>.scm` at comptime
 
-- `$state()` for reactive state
-- `$derived()` for computed values
-- `$effect()` for side effects
-- `$props()` for component props
-- `{#snippet}` blocks for reusable template fragments
-- `<Component {prop}>` shorthand when prop name matches
+## Adding a Language
 
-### Never
+1. Add grammar dependency to `build.zig.zon`
+2. Add grammar compilation to `build.zig` grammars array
+3. Add extern declaration + extension mapping in `src/parse/Language.zig`
+4. Write `queries/<language>.scm` with symbol capture patterns
+5. Add test fixture
 
-- `writable` / `readable` / `derived` stores from `svelte/store`
-- `$:` reactive statements (use `$derived()` / `$effect()`)
-- `export let` for props (use `$props()`)
-- `<slot>` (use `{#snippet}` + `{@render}`)
-- `onMount` / `onDestroy` (use `$effect()` cleanup)
-- `createEventDispatcher` (use callback props)
+## Adding a Command
 
-## General
+1. Create `src/commands/<name>.zig` with zig-clap params
+2. Add to SubCommand enum in `src/main.zig`
+3. Add dispatch case in main switch
+4. Support `--format json` for tool integration
+5. Add integration test
 
-- Named exports only (except `.svelte` components)
-- `import type` for type-only imports
-- Prefer `const` over `let`; never `var`
-- Exhaustive `switch` via `never` in `default`
-- File naming: `kebab-case.ts`, `PascalCase.svelte`
+## File Naming
+
+- `PascalCase.zig` for struct files (file-is-the-struct)
+- `snake_case.zig` for non-struct modules
+- `queries/<language>.scm` for tree-sitter queries
+
+## Testing
+
+- `zig build test` runs all tests
+- Integration tests in `test/integration/`
+- All tests use `std.testing.allocator` (auto leak detection)
+- Test fixtures per language in `test/fixtures/`
