@@ -85,11 +85,12 @@ const ts_query_go =
 
 const ts_query_zig_lang =
     \\[
-    \\  (TopLevelDecl
-    \\    (FnDecl
-    \\      (IDENTIFIER) @name)) @definition
-    \\  (VarDecl
-    \\    (IDENTIFIER) @name) @definition
+    \\  (function_declaration
+    \\    name: (identifier) @name) @definition
+    \\  (variable_declaration
+    \\    (identifier) @name) @definition
+    \\  (test_declaration
+    \\    (identifier) @name) @definition
     \\]
 ;
 

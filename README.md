@@ -82,6 +82,16 @@ Users authenticate via OAuth2. The validation flow uses @./src/auth/provider.ts#
 
 Each binding carries provenance via an `@change` suffix — a snapshot of which VCS change you last reviewed that file at. Provenance is per-binding, so different files track independently.
 
+If you don't want frontmatter visible in render frontends like GitHub, wrap it in an HTML comment instead — drift picks it up the same way:
+
+```markdown
+<!-- drift:
+  files:
+    - src/auth/login.ts@qpvuntsm
+    - src/auth/provider.ts#AuthConfig@qpvuntsm
+-->
+```
+
 ## Commands
 
 ```
