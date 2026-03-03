@@ -1,7 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers");
 
-test "link adds new file binding to spec" {
+test "link adds new file anchor to spec" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -19,7 +19,7 @@ test "link adds new file binding to spec" {
     try helpers.expectContains(content, "src/new.ts");
 }
 
-test "link adds binding with provenance" {
+test "link adds anchor with provenance" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -37,7 +37,7 @@ test "link adds binding with provenance" {
     try helpers.expectContains(content, "src/new.ts@abc123");
 }
 
-test "link updates provenance on existing binding" {
+test "link updates provenance on existing anchor" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -122,7 +122,7 @@ test "link updates inline references with provenance" {
     try helpers.expectContains(content, "@./src/helper.ts@");
 }
 
-test "link blanket mode updates all bindings" {
+test "link blanket mode updates all anchors" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -143,16 +143,16 @@ test "link blanket mode updates all bindings" {
 
     try helpers.expectExitCode(result.term, 0);
 
-    // Verify all bindings got provenance
+    // Verify all anchors got provenance
     const content = try repo.readFile("docs/spec.md");
     defer allocator.free(content);
     try helpers.expectContains(content, "@./src/a.ts@");
     try helpers.expectContains(content, "@./src/b.ts@");
-    // Frontmatter binding should also have provenance
+    // Frontmatter anchor should also have provenance
     try helpers.expectContains(content, "src/a.ts@");
 }
 
-test "link adds symbol binding" {
+test "link adds symbol anchor" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();

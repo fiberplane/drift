@@ -1,7 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers");
 
-test "lint reports ok for spec with no bindings" {
+test "lint reports ok for spec with no anchors" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -16,7 +16,7 @@ test "lint reports ok for spec with no bindings" {
     try helpers.expectContains(result.stdout, "ok");
 }
 
-test "lint reports ok when bound file has not changed since spec" {
+test "lint reports ok when anchored file has not changed since spec" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -25,7 +25,7 @@ test "lint reports ok when bound file has not changed since spec" {
     try repo.commit("add source file");
 
     try repo.writeSpec("docs/spec.md", &.{"src/main.ts"}, "# Spec\n");
-    try repo.commit("add spec binding to main.ts");
+    try repo.commit("add spec anchored to main.ts");
 
     const result = try repo.runDrift(&.{"lint"});
     defer result.deinit(allocator);
@@ -34,7 +34,7 @@ test "lint reports ok when bound file has not changed since spec" {
     try helpers.expectContains(result.stdout, "ok");
 }
 
-test "lint reports stale when bound file changed after spec" {
+test "lint reports stale when anchored file changed after spec" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -43,7 +43,7 @@ test "lint reports stale when bound file changed after spec" {
     try repo.writeFile("src/main.ts", "export function main() {}\n");
     try repo.commit("add spec and source");
 
-    // Modify the bound file without touching the spec
+    // Modify the anchored file without touching the spec
     try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
     try repo.commit("modify source file");
 
@@ -56,13 +56,13 @@ test "lint reports stale when bound file changed after spec" {
     try helpers.expectContains(output, "src/main.ts");
 }
 
-test "lint reports stale when bound file does not exist" {
+test "lint reports stale when anchored file does not exist" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
     try repo.writeSpec("docs/spec.md", &.{"src/missing.ts"}, "# Spec\n");
-    try repo.commit("add spec with missing binding");
+    try repo.commit("add spec with missing anchor");
 
     const result = try repo.runDrift(&.{"lint"});
     defer result.deinit(allocator);
@@ -101,7 +101,7 @@ test "lint exits 0 when all ok" {
     try repo.commit("add source file");
 
     try repo.writeSpec("docs/spec.md", &.{"src/main.ts"}, "# Spec\n");
-    try repo.commit("add spec binding to main.ts");
+    try repo.commit("add spec anchored to main.ts");
 
     const result = try repo.runDrift(&.{"lint"});
     defer result.deinit(allocator);
@@ -109,7 +109,7 @@ test "lint exits 0 when all ok" {
     try helpers.expectExitCode(result.term, 0);
 }
 
-test "lint detects inline bindings from content" {
+test "lint detects inline anchors from content" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -122,9 +122,9 @@ test "lint detects inline bindings from content" {
     ;
     try repo.writeSpec("docs/spec.md", &.{}, body);
     try repo.writeFile("src/helper.ts", "export function help() {}\n");
-    try repo.commit("add spec with inline binding and source");
+    try repo.commit("add spec with inline anchor and source");
 
-    // Modify the inline-bound file
+    // Modify the inline-anchored file
     try repo.writeFile("src/helper.ts", "export function help() { return true; }\n");
     try repo.commit("modify helper");
 
@@ -148,10 +148,10 @@ test "lint ok when provenance content matches current file" {
     const rev = try repo.getHeadRevision(allocator);
     defer allocator.free(rev);
 
-    // Create spec with binding pointing to that revision
-    const binding = try std.fmt.allocPrint(allocator, "src/main.ts@{s}", .{rev});
-    defer allocator.free(binding);
-    try repo.writeSpec("docs/spec.md", &.{binding}, "# Spec\n");
+    // Create spec with anchor pointing to that revision
+    const anchor = try std.fmt.allocPrint(allocator, "src/main.ts@{s}", .{rev});
+    defer allocator.free(anchor);
+    try repo.writeSpec("docs/spec.md", &.{anchor}, "# Spec\n");
     try repo.commit("add spec");
 
     const result = try repo.runDrift(&.{"lint"});
@@ -175,9 +175,9 @@ test "lint stale when provenance content differs" {
     try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
     try repo.commit("modify source");
 
-    const binding = try std.fmt.allocPrint(allocator, "src/main.ts@{s}", .{rev});
-    defer allocator.free(binding);
-    try repo.writeSpec("docs/spec.md", &.{binding}, "# Spec\n");
+    const anchor = try std.fmt.allocPrint(allocator, "src/main.ts@{s}", .{rev});
+    defer allocator.free(anchor);
+    try repo.writeSpec("docs/spec.md", &.{anchor}, "# Spec\n");
     try repo.commit("add spec");
 
     const result = try repo.runDrift(&.{"lint"});
@@ -189,7 +189,7 @@ test "lint stale when provenance content differs" {
     try helpers.expectContains(output, "changed after spec");
 }
 
-test "lint detects stale comment-based bindings" {
+test "lint detects stale comment-based anchors" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -197,11 +197,11 @@ test "lint detects stale comment-based bindings" {
     try repo.writeFile("src/main.ts", "export function main() {}\n");
     try repo.commit("add source");
 
-    // Write spec with comment-based binding (no frontmatter)
+    // Write spec with comment-based anchor (no frontmatter)
     try repo.writeFile("docs/spec.md", "# Spec\n\n<!-- drift:\n  files:\n    - src/main.ts\n-->\n\nSome docs.\n");
-    try repo.commit("add spec with comment binding");
+    try repo.commit("add spec with comment anchor");
 
-    // Modify the bound file
+    // Modify the anchored file
     try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
     try repo.commit("modify source");
 
@@ -214,14 +214,14 @@ test "lint detects stale comment-based bindings" {
     try helpers.expectContains(output, "src/main.ts");
 }
 
-test "lint reports stale for missing symbol binding" {
+test "lint reports stale for missing symbol anchor" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
     try repo.writeFile("src/lib.ts", "export function doStuff() { return 1; }\n");
     try repo.writeSpec("docs/spec.md", &.{"src/lib.ts#MissingSymbol"}, "# Spec\n");
-    try repo.commit("add spec with missing symbol binding");
+    try repo.commit("add spec with missing symbol anchor");
 
     const result = try repo.runDrift(&.{"lint"});
     defer result.deinit(allocator);

@@ -3,12 +3,12 @@ const frontmatter = @import("frontmatter.zig");
 
 pub const Spec = struct {
     path: []const u8,
-    bindings: std.ArrayList([]const u8),
+    anchors: std.ArrayList([]const u8),
 
     pub fn deinit(self: *Spec, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
-        for (self.bindings.items) |b| allocator.free(b);
-        self.bindings.deinit(allocator);
+        for (self.anchors.items) |b| allocator.free(b);
+        self.anchors.deinit(allocator);
     }
 };
 
@@ -52,10 +52,10 @@ pub fn walkForSpecs(allocator: std.mem.Allocator, dir: std.fs.Dir, prefix: []con
             };
             defer allocator.free(content);
 
-            if (frontmatter.parseDriftSpec(allocator, content)) |bindings| {
+            if (frontmatter.parseDriftSpec(allocator, content)) |anchors| {
                 try specs.append(allocator, .{
                     .path = file_path,
-                    .bindings = bindings,
+                    .anchors = anchors,
                 });
             } else {
                 allocator.free(file_path);
@@ -64,9 +64,9 @@ pub fn walkForSpecs(allocator: std.mem.Allocator, dir: std.fs.Dir, prefix: []con
     }
 }
 
-/// Parse inline bindings (@./path references) from markdown content body.
-pub fn parseInlineBindings(allocator: std.mem.Allocator, content: []const u8) std.ArrayList([]const u8) {
-    var bindings: std.ArrayList([]const u8) = .{};
+/// Parse inline anchors (@./path references) from markdown content body.
+pub fn parseInlineAnchors(allocator: std.mem.Allocator, content: []const u8) std.ArrayList([]const u8) {
+    var anchors: std.ArrayList([]const u8) = .{};
 
     // Find body: skip frontmatter if present
     const body = blk: {
@@ -119,7 +119,7 @@ pub fn parseInlineBindings(allocator: std.mem.Allocator, content: []const u8) st
                     pos = path_end;
                     continue;
                 };
-                bindings.append(allocator, duped) catch {
+                anchors.append(allocator, duped) catch {
                     allocator.free(duped);
                     pos = path_end;
                     continue;
@@ -132,13 +132,13 @@ pub fn parseInlineBindings(allocator: std.mem.Allocator, content: []const u8) st
         }
     }
 
-    return bindings;
+    return anchors;
 }
 
 /// Update inline `@./` references with a new provenance change ID.
 /// If `target_file` is non-null, only update refs whose file identity matches.
 /// If null, update all inline refs. Returns the full updated content.
-pub fn updateInlineBindings(
+pub fn updateInlineAnchors(
     allocator: std.mem.Allocator,
     content: []const u8,
     target_file: ?[]const u8,
@@ -178,7 +178,7 @@ pub fn updateInlineBindings(
                 const ref_path = content[path_start..ref_end]; // path after "@./"
 
                 // Get file identity (strips @provenance)
-                const ref_identity = frontmatter.bindingFileIdentity(ref_path);
+                const ref_identity = frontmatter.anchorFileIdentity(ref_path);
 
                 // Get file path portion (strips #symbol) for matching
                 const ref_hash_pos = std.mem.indexOfScalar(u8, ref_identity, '#');

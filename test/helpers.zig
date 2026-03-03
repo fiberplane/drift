@@ -67,7 +67,7 @@ pub const TempRepo = struct {
     }
 
     /// Write a markdown spec file with drift frontmatter.
-    /// `frontmatter_files` is the list of file bindings for the drift: files: section.
+    /// `frontmatter_files` is the list of file anchors for the drift: files: section.
     /// `body` is the markdown body after the frontmatter.
     pub fn writeSpec(self: *TempRepo, path: []const u8, frontmatter_files: []const []const u8, body: []const u8) !void {
         var buf: std.ArrayList(u8) = .{};

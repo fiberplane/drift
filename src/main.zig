@@ -119,23 +119,23 @@ fn runLint(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     defer root_dir.close();
     try scanner.walkForSpecs(allocator, root_dir, "", &specs);
 
-    // Also parse inline anchors from body content of each spec
+    // Parse inline anchors from body content of each spec
     for (specs.items) |*spec| {
         const content = std.fs.cwd().readFileAlloc(allocator, spec.path, 1024 * 1024) catch continue;
         defer allocator.free(content);
 
-        var inline_bindings = scanner.parseInlineBindings(allocator, content);
-        for (inline_bindings.items) |ib| {
+        var inline_anchors = scanner.parseInlineAnchors(allocator, content);
+        for (inline_anchors.items) |ib| {
             // Avoid duplicates
             var already_bound = false;
-            for (spec.bindings.items) |existing| {
+            for (spec.anchors.items) |existing| {
                 if (std.mem.eql(u8, existing, ib)) {
                     already_bound = true;
                     break;
                 }
             }
             if (!already_bound) {
-                spec.bindings.append(allocator, ib) catch {
+                spec.anchors.append(allocator, ib) catch {
                     allocator.free(ib);
                     continue;
                 };
@@ -143,7 +143,7 @@ fn runLint(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
                 allocator.free(ib);
             }
         }
-        inline_bindings.deinit(allocator);
+        inline_anchors.deinit(allocator);
     }
 
     // Sort specs by path for deterministic output
@@ -163,7 +163,7 @@ fn runLint(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     for (specs.items) |spec| {
         stdout_w.print("{s}\n", .{spec.path}) catch {};
 
-        if (spec.bindings.items.len == 0) {
+        if (spec.anchors.items.len == 0) {
             stdout_w.print("  ok\n", .{}) catch {};
             continue;
         }
@@ -177,9 +177,9 @@ fn runLint(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
 
         var all_ok = true;
 
-        for (spec.bindings.items) |binding| {
-            const status = checkBinding(allocator, cwd_path, binding, spec_commit, detected_vcs) catch |err| {
-                stderr_w.print("error checking {s}: {s}\n", .{ binding, @errorName(err) }) catch {};
+        for (spec.anchors.items) |anchor| {
+            const status = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs) catch |err| {
+                stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
                 continue;
             };
             defer allocator.free(status.label);
@@ -212,23 +212,23 @@ fn runLint(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     }
 }
 
-const BindingStatus = struct {
+const AnchorStatus = struct {
     label: []const u8,
     display: []const u8,
     reason: []const u8,
 };
 
-fn checkBinding(
+fn checkAnchor(
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
-    binding: []const u8,
+    anchor: []const u8,
     spec_commit: ?[]const u8,
     detected_vcs: vcs.VcsKind,
-) !BindingStatus {
+) !AnchorStatus {
     // Parse the anchor: extract file_path, symbol_name (optional), provenance (optional)
-    const identity = frontmatter.bindingFileIdentity(binding);
-    const provenance: ?[]const u8 = if (identity.len < binding.len)
-        binding[identity.len + 1 ..]
+    const identity = frontmatter.anchorFileIdentity(anchor);
+    const provenance: ?[]const u8 = if (identity.len < anchor.len)
+        anchor[identity.len + 1 ..]
     else
         null;
 
@@ -246,7 +246,7 @@ fn checkBinding(
     if (!file_exists) {
         return .{
             .label = try allocator.dupe(u8, "STALE"),
-            .display = binding,
+            .display = anchor,
             .reason = try allocator.dupe(u8, "file not found"),
         };
     }
@@ -256,7 +256,7 @@ fn checkBinding(
         const file_content = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch {
             return .{
                 .label = try allocator.dupe(u8, "STALE"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, "file not readable"),
             };
         };
@@ -267,7 +267,7 @@ fn checkBinding(
             if (!symbols.resolveSymbolWithTreeSitter(file_content, lang_query, sym)) {
                 return .{
                     .label = try allocator.dupe(u8, "STALE"),
-                    .display = binding,
+                    .display = anchor,
                     .reason = try allocator.dupe(u8, "symbol not found"),
                 };
             }
@@ -276,7 +276,7 @@ fn checkBinding(
             if (std.mem.indexOf(u8, file_content, sym) == null) {
                 return .{
                     .label = try allocator.dupe(u8, "STALE"),
-                    .display = binding,
+                    .display = anchor,
                     .reason = try allocator.dupe(u8, "symbol not found"),
                 };
             }
@@ -285,7 +285,7 @@ fn checkBinding(
 
     // Content-based staleness check when provenance is present
     if (provenance) |prov| {
-        return checkBindingByContent(allocator, cwd_path, binding, file_path, symbol_name, prov, spec_commit, detected_vcs);
+        return checkAnchorByContent(allocator, cwd_path, anchor, file_path, symbol_name, prov, spec_commit, detected_vcs);
     }
 
     // No provenance: use VCS history-based check
@@ -294,7 +294,7 @@ fn checkBinding(
         if (is_stale) {
             return .{
                 .label = try allocator.dupe(u8, "STALE"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, "changed after spec"),
             };
         }
@@ -302,21 +302,21 @@ fn checkBinding(
 
     return .{
         .label = try allocator.dupe(u8, "ok"),
-        .display = binding,
+        .display = anchor,
         .reason = try allocator.dupe(u8, ""),
     };
 }
 
-fn checkBindingByContent(
+fn checkAnchorByContent(
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
-    binding: []const u8,
+    anchor: []const u8,
     file_path: []const u8,
     symbol_name: ?[]const u8,
     provenance: []const u8,
     spec_commit: ?[]const u8,
     detected_vcs: vcs.VcsKind,
-) !BindingStatus {
+) !AnchorStatus {
     // Get historical content at provenance revision.
     // Fall back to spec's last commit if provenance is unresolvable (e.g. jj change ID in git-only CI).
     const historical_content = blk: {
@@ -333,7 +333,7 @@ fn checkBindingByContent(
     const current_content = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch {
         return .{
             .label = try allocator.dupe(u8, "STALE"),
-            .display = binding,
+            .display = anchor,
             .reason = try allocator.dupe(u8, "file not found"),
         };
     };
@@ -342,7 +342,7 @@ fn checkBindingByContent(
     if (historical_content == null) {
         return .{
             .label = try allocator.dupe(u8, "STALE"),
-            .display = binding,
+            .display = anchor,
             .reason = try allocator.dupe(u8, "changed after spec"),
         };
     }
@@ -355,13 +355,13 @@ fn checkBindingByContent(
             if (!std.mem.eql(u8, historical_content.?, current_content)) {
                 return .{
                     .label = try allocator.dupe(u8, "STALE"),
-                    .display = binding,
+                    .display = anchor,
                     .reason = try allocator.dupe(u8, "changed after spec"),
                 };
             }
             return .{
                 .label = try allocator.dupe(u8, "ok"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, ""),
             };
         };
@@ -370,7 +370,7 @@ fn checkBindingByContent(
         if (current_range == null) {
             return .{
                 .label = try allocator.dupe(u8, "STALE"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, "symbol not found"),
             };
         }
@@ -380,7 +380,7 @@ fn checkBindingByContent(
             // Symbol didn't exist at provenance
             return .{
                 .label = try allocator.dupe(u8, "STALE"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, "changed after spec"),
             };
         }
@@ -391,7 +391,7 @@ fn checkBindingByContent(
         if (!std.mem.eql(u8, current_sym, historical_sym)) {
             return .{
                 .label = try allocator.dupe(u8, "STALE"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, "changed after spec"),
             };
         }
@@ -400,7 +400,7 @@ fn checkBindingByContent(
         if (!std.mem.eql(u8, historical_content.?, current_content)) {
             return .{
                 .label = try allocator.dupe(u8, "STALE"),
-                .display = binding,
+                .display = anchor,
                 .reason = try allocator.dupe(u8, "changed after spec"),
             };
         }
@@ -408,7 +408,7 @@ fn checkBindingByContent(
 
     return .{
         .label = try allocator.dupe(u8, "ok"),
-        .display = binding,
+        .display = anchor,
         .reason = try allocator.dupe(u8, ""),
     };
 }
@@ -461,14 +461,14 @@ fn writeSpecsText(w: *std.io.Writer, specs: []const Spec) void {
     for (specs, 0..) |spec, idx| {
         w.print("{s} ({d} anchor{s})\n", .{
             spec.path,
-            spec.bindings.items.len,
-            if (spec.bindings.items.len == 1) "" else "s",
+            spec.anchors.items.len,
+            if (spec.anchors.items.len == 1) "" else "s",
         }) catch {};
 
-        if (spec.bindings.items.len > 0) {
+        if (spec.anchors.items.len > 0) {
             w.print("  files:\n", .{}) catch {};
-            for (spec.bindings.items) |binding| {
-                w.print("    - {s}\n", .{binding}) catch {};
+            for (spec.anchors.items) |anchor| {
+                w.print("    - {s}\n", .{anchor}) catch {};
             }
         }
 
@@ -483,9 +483,9 @@ fn writeSpecsJson(w: *std.io.Writer, specs: []const Spec) void {
     for (specs, 0..) |spec, idx| {
         if (idx > 0) w.print(",", .{}) catch {};
         w.print("{{\"spec\":\"{s}\",\"files\":[", .{spec.path}) catch {};
-        for (spec.bindings.items, 0..) |binding, bidx| {
+        for (spec.anchors.items, 0..) |anchor, bidx| {
             if (bidx > 0) w.print(",", .{}) catch {};
-            w.print("\"{s}\"", .{binding}) catch {};
+            w.print("\"{s}\"", .{anchor}) catch {};
         }
         w.print("]}}", .{}) catch {};
     }
@@ -503,7 +503,7 @@ fn runUnlink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *
     }
 
     const spec_path = args[2];
-    const binding = args[3];
+    const anchor = args[3];
 
     const cwd = std.fs.cwd();
     const content = cwd.readFileAlloc(allocator, spec_path, 1024 * 1024) catch |err| {
@@ -512,7 +512,7 @@ fn runUnlink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *
     };
     defer allocator.free(content);
 
-    const result = try frontmatter.unlinkBinding(allocator, content, binding);
+    const result = try frontmatter.unlinkAnchor(allocator, content, anchor);
     defer allocator.free(result.content);
 
     if (result.removed) {
@@ -525,7 +525,7 @@ fn runUnlink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *
         try file.writeAll(result.content);
         try file.setEndPos(result.content.len);
 
-        stdout_w.print("removed {s} from {s}\n", .{ binding, spec_path }) catch {};
+        stdout_w.print("removed {s} from {s}\n", .{ anchor, spec_path }) catch {};
     }
 }
 
@@ -563,34 +563,34 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
 
     if (args.len >= 4) {
         // Targeted mode: drift link <spec-path> <anchor>
-        const raw_binding = args[3];
+        const raw_anchor = args[3];
 
         // Auto-provenance: if no @change suffix, append current change ID
-        const binding = blk: {
-            const identity = frontmatter.bindingFileIdentity(raw_binding);
-            if (identity.len != raw_binding.len) {
-                break :blk raw_binding;
+        const anchor = blk: {
+            const identity = frontmatter.anchorFileIdentity(raw_anchor);
+            if (identity.len != raw_anchor.len) {
+                break :blk raw_anchor;
             }
             if (auto_change_id) |cid| {
-                break :blk std.fmt.allocPrint(allocator, "{s}@{s}", .{ raw_binding, cid }) catch break :blk raw_binding;
+                break :blk std.fmt.allocPrint(allocator, "{s}@{s}", .{ raw_anchor, cid }) catch break :blk raw_anchor;
             }
-            break :blk raw_binding;
+            break :blk raw_anchor;
         };
-        const binding_owned = binding.ptr != raw_binding.ptr;
-        defer if (binding_owned) allocator.free(binding);
+        const anchor_owned = anchor.ptr != raw_anchor.ptr;
+        defer if (anchor_owned) allocator.free(anchor);
 
         // Update frontmatter anchor
-        const after_frontmatter = try frontmatter.linkBinding(allocator, content, binding);
+        const after_frontmatter = try frontmatter.linkAnchor(allocator, content, anchor);
         defer allocator.free(after_frontmatter);
 
-        // Also update inline references matching this file
-        const target_file = frontmatter.bindingFileIdentity(raw_binding);
+        // Update inline references matching this file
+        const target_file = frontmatter.anchorFileIdentity(raw_anchor);
         // Strip #symbol from target_file to get just the file path for inline matching
         const target_hash_pos = std.mem.indexOfScalar(u8, target_file, '#');
         const target_path = if (target_hash_pos) |pos| target_file[0..pos] else target_file;
 
         const change_id = if (auto_change_id) |cid| cid else "unknown";
-        const final_result = try scanner.updateInlineBindings(allocator, after_frontmatter, target_path, change_id);
+        const final_result = try scanner.updateInlineAnchors(allocator, after_frontmatter, target_path, change_id);
         defer allocator.free(final_result);
 
         const file = cwd.openFile(spec_path, .{ .mode = .write_only }) catch |err| {
@@ -602,7 +602,7 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
         try file.writeAll(final_result);
         try file.setEndPos(final_result.len);
 
-        stdout_w.print("added {s} to {s}\n", .{ binding, spec_path }) catch {};
+        stdout_w.print("added {s} to {s}\n", .{ anchor, spec_path }) catch {};
     } else {
         // Blanket mode: drift link <spec-path>
         const change_id = auto_change_id orelse {
@@ -611,11 +611,11 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
         };
 
         // Update all frontmatter anchors
-        const after_frontmatter = try frontmatter.relinkAllBindings(allocator, content, change_id);
+        const after_frontmatter = try frontmatter.relinkAllAnchors(allocator, content, change_id);
         defer allocator.free(after_frontmatter);
 
         // Update all inline references
-        const final_result = try scanner.updateInlineBindings(allocator, after_frontmatter, null, change_id);
+        const final_result = try scanner.updateInlineAnchors(allocator, after_frontmatter, null, change_id);
         defer allocator.free(final_result);
 
         const file = cwd.openFile(spec_path, .{ .mode = .write_only }) catch |err| {

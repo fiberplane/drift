@@ -1,7 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers");
 
-test "status shows spec with its bindings" {
+test "status shows spec with its anchors" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -19,7 +19,7 @@ test "status shows spec with its bindings" {
     try helpers.expectContains(result.stdout, "src/auth/provider.ts");
 }
 
-test "status shows provenance on bindings" {
+test "status shows provenance on anchors" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
