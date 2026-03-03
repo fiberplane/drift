@@ -10,13 +10,13 @@ Initial release. Complete rewrite in Zig from the original TypeScript/Effect pro
 
 - Bind markdown specs to code files and AST symbols via YAML frontmatter or `<!-- drift: -->` HTML comments
 - `drift lint` — check all specs for staleness, exit 1 if any are stale
-- `drift status` — show all specs and their bindings
-- `drift link` — add or refresh bindings with auto-provenance stamping
-- `drift unlink` — remove a binding from a spec
-- Symbol-level bindings (`file.ts#SymbolName`) via tree-sitter — changes elsewhere in the file don't trigger staleness
-- Inline `@./path` references in spec body, parsed and tracked alongside frontmatter bindings
+- `drift status` — show all specs and their anchors
+- `drift link` — add or refresh anchors with auto-provenance stamping
+- `drift unlink` — remove an anchor from a spec
+- Symbol-level anchors (`file.ts#SymbolName`) via tree-sitter — changes elsewhere in the file don't trigger staleness
+- Inline `@./path` references in spec body, parsed and tracked alongside frontmatter anchors
 - Content-based staleness detection — compares file/symbol content at provenance revision vs current
-- Per-binding provenance via `@change` suffix — each binding tracks independently
+- Per-anchor provenance via `@change` suffix — each anchor tracks independently
 - git and jj VCS support, auto-detected from `.jj` or `.git`
 - 6 languages supported: TypeScript, Python, Rust, Go, Zig, Java
 - GitHub Action (`fiberplane/drift@main`) for CI integration

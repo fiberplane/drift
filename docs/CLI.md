@@ -1,7 +1,7 @@
 ---
 drift:
   files:
-    - src/main.zig@kznzovvs
+    - src/main.zig@uvukztro
 ---
 
 # CLI Reference
@@ -10,13 +10,13 @@ All commands support `--format json` for tool integration.
 
 ## drift lint
 
-Check all specs for staleness. The primary command. Exits 1 if any binding is stale.
+Check all specs for staleness. The primary command. Exits 1 if any anchor is stale.
 
 ```
 drift lint [--format json]
 ```
 
-Scans the repo for markdown files with `drift:` frontmatter. For each spec, checks if any bound file was modified after the spec. Reports stale bindings with reasons.
+Scans the repo for markdown files with `drift:` frontmatter. For each spec, checks if any bound file was modified after the spec. Reports stale anchors with reasons.
 
 ```
 $ drift lint
@@ -39,7 +39,7 @@ docs/project.md
 
 ## drift status
 
-Show all specs and their bindings without checking staleness.
+Show all specs and their anchors without checking staleness.
 
 ```
 drift status [--format json]
@@ -48,22 +48,22 @@ drift status [--format json]
 ```
 $ drift status
 
-docs/auth.md (3 bindings)
+docs/auth.md (3 anchors)
   files:
     - src/auth/provider.ts#AuthConfig@qpvuntsm
     - src/auth/login.ts@qpvuntsm
     - src/auth/session.ts
 
-docs/payments.md (1 binding)
+docs/payments.md (1 anchor)
   files:
     - src/payments/stripe.ts
 
-docs/project.md (0 bindings)
+docs/project.md (0 anchors)
 ```
 
 ## drift link
 
-Add a binding to a spec's frontmatter. When no `@change` suffix is provided, drift auto-appends the current HEAD (git) or current change ID (jj) as provenance.
+Add an anchor to a spec's frontmatter. When no `@change` suffix is provided, drift auto-appends the current HEAD (git) or current change ID (jj) as provenance.
 
 ```
 drift link <spec-path> <file[@change]>
@@ -87,14 +87,14 @@ If the spec file doesn't have `drift:` frontmatter yet, it's added. If the file 
 
 ## drift unlink
 
-Remove a binding from a spec's frontmatter.
+Remove an anchor from a spec's frontmatter.
 
 ```
 drift unlink <spec-path> <file>
 drift unlink <spec-path> <file#Symbol>
 ```
 
-The provenance suffix is not needed for unlinking -- the file path (with optional symbol) is sufficient to identify the binding.
+The provenance suffix is not needed for unlinking -- the file path (with optional symbol) is sufficient to identify the anchor.
 
 ```
 $ drift unlink docs/auth.md src/auth/old-handler.ts

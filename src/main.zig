@@ -97,9 +97,9 @@ fn printUsage(w: *std.io.Writer) void {
         \\
         \\Commands:
         \\  lint      Check all specs for staleness
-        \\  status    Show all specs and their bindings
-        \\  link      Add bindings to a spec
-        \\  unlink    Remove bindings from a spec
+        \\  status    Show all specs and their anchors
+        \\  link      Add anchors to a spec
+        \\  unlink    Remove anchors from a spec
         \\
         \\Options:
         \\  -h, --help     Show this help message
@@ -119,7 +119,7 @@ fn runLint(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     defer root_dir.close();
     try scanner.walkForSpecs(allocator, root_dir, "", &specs);
 
-    // Also parse inline bindings from body content of each spec
+    // Also parse inline anchors from body content of each spec
     for (specs.items) |*spec| {
         const content = std.fs.cwd().readFileAlloc(allocator, spec.path, 1024 * 1024) catch continue;
         defer allocator.free(content);
@@ -225,7 +225,7 @@ fn checkBinding(
     spec_commit: ?[]const u8,
     detected_vcs: vcs.VcsKind,
 ) !BindingStatus {
-    // Parse the binding: extract file_path, symbol_name (optional), provenance (optional)
+    // Parse the anchor: extract file_path, symbol_name (optional), provenance (optional)
     const identity = frontmatter.bindingFileIdentity(binding);
     const provenance: ?[]const u8 = if (identity.len < binding.len)
         binding[identity.len + 1 ..]
@@ -251,7 +251,7 @@ fn checkBinding(
         };
     }
 
-    // If symbol binding, check if symbol exists in the file via tree-sitter
+    // If symbol anchor, check if symbol exists in the file via tree-sitter
     if (symbol_name) |sym| {
         const file_content = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch {
             return .{
@@ -459,7 +459,7 @@ fn writeSpecsText(w: *std.io.Writer, specs: []const Spec) void {
     if (specs.len == 0) return;
 
     for (specs, 0..) |spec, idx| {
-        w.print("{s} ({d} binding{s})\n", .{
+        w.print("{s} ({d} anchor{s})\n", .{
             spec.path,
             spec.bindings.items.len,
             if (spec.bindings.items.len == 1) "" else "s",
@@ -496,9 +496,9 @@ fn runUnlink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    // args[0] = binary path, args[1] = "unlink", args[2] = spec-path, args[3] = binding
+    // args[0] = binary path, args[1] = "unlink", args[2] = spec-path, args[3] = anchor
     if (args.len < 4) {
-        stderr_w.print("usage: drift unlink <spec-path> <binding>\n", .{}) catch {};
+        stderr_w.print("usage: drift unlink <spec-path> <anchor>\n", .{}) catch {};
         return error.MissingArguments;
     }
 
@@ -535,9 +535,9 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    // args[0] = binary path, args[1] = "link", args[2] = spec-path, args[3] = binding (optional)
+    // args[0] = binary path, args[1] = "link", args[2] = spec-path, args[3] = anchor (optional)
     if (args.len < 3) {
-        stderr_w.print("usage: drift link <spec-path> [binding]\n", .{}) catch {};
+        stderr_w.print("usage: drift link <spec-path> [anchor]\n", .{}) catch {};
         return error.MissingArguments;
     }
 
@@ -562,7 +562,7 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     defer allocator.free(content);
 
     if (args.len >= 4) {
-        // Targeted mode: drift link <spec-path> <binding>
+        // Targeted mode: drift link <spec-path> <anchor>
         const raw_binding = args[3];
 
         // Auto-provenance: if no @change suffix, append current change ID
@@ -579,7 +579,7 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
         const binding_owned = binding.ptr != raw_binding.ptr;
         defer if (binding_owned) allocator.free(binding);
 
-        // Update frontmatter binding
+        // Update frontmatter anchor
         const after_frontmatter = try frontmatter.linkBinding(allocator, content, binding);
         defer allocator.free(after_frontmatter);
 
@@ -610,7 +610,7 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
             return error.NoChangeId;
         };
 
-        // Update all frontmatter bindings
+        // Update all frontmatter anchors
         const after_frontmatter = try frontmatter.relinkAllBindings(allocator, content, change_id);
         defer allocator.free(after_frontmatter);
 
@@ -627,6 +627,6 @@ fn runLink(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
         try file.writeAll(final_result);
         try file.setEndPos(final_result.len);
 
-        stdout_w.print("relinked all bindings in {s}\n", .{spec_path}) catch {};
+        stdout_w.print("relinked all anchors in {s}\n", .{spec_path}) catch {};
     }
 }

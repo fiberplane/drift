@@ -1,9 +1,9 @@
 ---
 drift:
   files:
-    - src/main.zig@lpqxspws
-    - src/symbols.zig@lpqxspws
-    - src/vcs.zig@lpqxspws
+    - src/main.zig@uvukztro
+    - src/symbols.zig@uvukztro
+    - src/vcs.zig@uvukztro
 ---
 
 # Decisions
@@ -20,15 +20,15 @@ The previous drift implementation was TypeScript/Bun with the Effect ecosystem. 
 
 drift knows exactly which files it cares about — they're declared in spec frontmatter and `@` imports. It parses only those files, only when checking them. A lint run that touches 20 files does 20 tree-sitter parses. No index, no cache, no invalidation logic.
 
-This keeps the tool stateless. Every `drift lint` run starts clean, reads specs, resolves bindings, queries VCS, reports. Nothing to get stale except the specs themselves.
+This keeps the tool stateless. Every `drift lint` run starts clean, reads specs, resolves anchors, queries VCS, reports. Nothing to get stale except the specs themselves.
 
-## 3. Unified binding syntax with inline provenance
+## 3. Unified anchor syntax with inline provenance
 
-Bindings and provenance live together in the spec file's YAML frontmatter using the `file@change` syntax, not in separate `files:` and `changes:` lists. Each binding carries its own provenance as an `@change` suffix (e.g. `src/auth/login.ts@qpvuntsm`). The spec file is self-contained — its bindings, dependencies, and provenance are all in one place.
+Anchors and provenance live together in the spec file's YAML frontmatter using the `file@change` syntax, not in separate `files:` and `changes:` lists. Each anchor carries its own provenance as an `@change` suffix (e.g. `src/auth/login.ts@qpvuntsm`). The spec file is self-contained — its anchors, dependencies, and provenance are all in one place.
 
-This design means provenance is per-binding rather than per-spec. When an agent updates code for one binding, it stamps just that binding's change reference without affecting others. A spec with three bindings can have two fresh and one stale, and the `@change` suffix makes it immediately visible which bindings have been addressed.
+This design means provenance is per-anchor rather than per-spec. When an agent updates code for one anchor, it stamps just that anchor's change reference without affecting others. A spec with three anchors can have two fresh and one stale, and the `@change` suffix makes it immediately visible which anchors have been addressed.
 
-`drift link` edits the spec file directly. The binding is visible to anyone reading the spec. The VCS tracks when bindings were added or removed as part of the spec's history.
+`drift link` edits the spec file directly. The anchor is visible to anyone reading the spec. The VCS tracks when anchors were added or removed as part of the spec's history.
 
 The alternative (a central evidence file) enables querying "which specs bind to this file?" without scanning all specs. We chose scanning because: the number of spec files is small (tens, not thousands), scanning is fast (just frontmatter parsing, no tree-sitter), and self-contained specs are easier to reason about.
 
@@ -36,20 +36,20 @@ The alternative (a central evidence file) enables querying "which specs bind to 
 
 Staleness is detected by comparing VCS history: "was any bound file modified after the spec was last modified?" This requires no stored state beyond what the VCS already tracks.
 
-We considered a lockfile (stored content hashes per binding). A lockfile would enable offline staleness detection and wouldn't depend on VCS history ordering. We rejected it because:
+We considered a lockfile (stored content hashes per anchor). A lockfile would enable offline staleness detection and wouldn't depend on VCS history ordering. We rejected it because:
 
 - It introduces an escape hatch: `drift lock` could silence lint warnings without updating the spec
 - It's redundant state that can itself drift from reality
 - VCS history is reliable for the common rebase/merge patterns developers actually use
 - The one edge case (interactive rebase reordering unrelated commits) produces safe false positives, not dangerous false negatives
 
-## 5. Symbol-level bindings via tree-sitter
+## 5. Symbol-level anchors via tree-sitter
 
-File-level bindings are coarse. If a spec binds to `src/auth/provider.ts` and someone adds an unrelated utility at the bottom of the file, the spec is flagged stale for no reason.
+File-level anchors are coarse. If a spec binds to `src/auth/provider.ts` and someone adds an unrelated utility at the bottom of the file, the spec is flagged stale for no reason.
 
-Symbol-level bindings (`src/auth/provider.ts#AuthConfig`) resolve to a specific AST declaration. Only changes to that symbol trigger staleness. This uses tree-sitter with per-language `.scm` queries.
+Symbol-level anchors (`src/auth/provider.ts#AuthConfig`) resolve to a specific AST declaration. Only changes to that symbol trigger staleness. This uses tree-sitter with per-language `.scm` queries.
 
-The resolution is simple: parse file, run query, filter by symbol name, hash the matched node's text. If the symbol is not found, the binding is reported as STALE with reason "symbol not found".
+The resolution is simple: parse file, run query, filter by symbol name, hash the matched node's text. If the symbol is not found, the anchor is reported as STALE with reason "symbol not found".
 
 We chose tree-sitter over regex because:
 - Regex breaks on string literals containing declaration keywords
@@ -57,7 +57,7 @@ We chose tree-sitter over regex because:
 - Tree-sitter grammars exist for every mainstream language
 - The per-file parse cost is negligible (sub-millisecond)
 
-File-level bindings remain the default. Symbol-level is opt-in for precision where it matters.
+File-level anchors remain the default. Symbol-level is opt-in for precision where it matters.
 
 ## 6. Specs live anywhere, not in a special directory
 
@@ -71,7 +71,7 @@ Discovery is by scanning — drift walks the repo looking for markdown files wit
 
 drift shells out to git or jj rather than using a library. The VCS is auto-detected by checking for `.jj` (preferred) or `.git`.
 
-jj's stable change IDs are a better fit for provenance tracking (the `@change` suffix on bindings) because they survive rewrites. git SHAs may become unreachable after rebase, but staleness detection uses file-level VCS history queries, not stored SHAs, so this doesn't affect correctness.
+jj's stable change IDs are a better fit for provenance tracking (the `@change` suffix on anchors) because they survive rewrites. git SHAs may become unreachable after rebase, but staleness detection uses file-level VCS history queries, not stored SHAs, so this doesn't affect correctness.
 
 ## 8. Vendored tree-sitter core, grammars as build deps
 

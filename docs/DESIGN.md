@@ -1,11 +1,11 @@
 ---
 drift:
   files:
-    - src/main.zig@nsqnzlrv
-    - src/frontmatter.zig@nsqnzlrv
-    - src/scanner.zig@nsqnzlrv
-    - src/symbols.zig@nsqnzlrv
-    - src/vcs.zig@nsqnzlrv
+    - src/main.zig@uvukztro
+    - src/frontmatter.zig@uvukztro
+    - src/scanner.zig@uvukztro
+    - src/symbols.zig@uvukztro
+    - src/vcs.zig@uvukztro
 ---
 
 # Design
@@ -16,7 +16,7 @@ Specs and code drift apart. Documentation describes intent, code implements it, 
 
 ## Solution
 
-drift makes the binding between specs and code explicit and enforceable. Any markdown file can declare which code it governs. When that code changes, `drift lint` flags the spec as stale. The lint runs as a CI gate or pre-commit hook — agents that change code must update the specs they affect.
+drift makes the anchor between specs and code explicit and enforceable. Any markdown file can declare which code it governs. When that code changes, `drift lint` flags the spec as stale. The lint runs as a CI gate or pre-commit hook — agents that change code must update the specs they affect.
 
 ## Data Model
 
@@ -39,28 +39,28 @@ The login flow uses @./src/auth/provider.ts#AuthConfig@qpvuntsm for token valida
 <!-- depends: docs/project.md -->
 ```
 
-### Bindings
+### Anchors
 
-A binding is a declared relationship between a spec and a code artifact. Two sources:
+An anchor is a declared relationship between a spec and a code artifact. Two sources:
 
-**Explicit bindings** — listed in `drift.files` frontmatter. Can be file-level (`src/auth/login.ts`) or symbol-level (`src/auth/provider.ts#AuthConfig`).
+**Explicit anchors** — listed in `drift.files` frontmatter. Can be file-level (`src/auth/login.ts`) or symbol-level (`src/auth/provider.ts#AuthConfig`).
 
-**Implicit bindings** — `@./path` and `@./path#Symbol` references in the spec body. Parsed from content, treated identically to explicit bindings for staleness detection.
+**Implicit anchors** — `@./path` and `@./path#Symbol` references in the spec body. Parsed from content, treated identically to explicit anchors for staleness detection.
 
-Each binding can optionally carry provenance — a VCS reference (git SHA or jj change ID) recording which change last addressed this binding. The syntax is `path@change`:
+Each anchor can optionally carry provenance — a VCS reference (git SHA or jj change ID) recording which change last addressed this anchor. The syntax is `path@change`:
 
 - `src/auth/login.ts` — bound file, no provenance yet
 - `src/auth/login.ts@qpvuntsm` — bound file with provenance at change qpvuntsm
-- `src/auth/provider.ts#AuthConfig@qpvuntsm` — symbol binding with provenance
+- `src/auth/provider.ts#AuthConfig@qpvuntsm` — symbol anchor with provenance
 - In inline references: `@./src/auth/login.ts@qpvuntsm`
 
-The `@change` suffix is optional. Bare paths still work. Different bindings can have different provenance since each file tracks its own change independently. There is no separate `changes:` list.
+The `@change` suffix is optional. Bare paths still work. Different anchors can have different provenance since each file tracks its own change independently. There is no separate `changes:` list.
 
 In jj, change IDs are stable across rewrites. In git, SHAs may become unreachable after rebase, but staleness detection is VCS-history-based, not SHA-based, so this doesn't affect correctness.
 
-### Symbol-Level Bindings
+### Symbol-Level Anchors
 
-A binding like `src/auth/provider.ts#AuthConfig` resolves to a specific AST symbol rather than the whole file. drift parses the file with tree-sitter, finds the symbol's declaration, and hashes its content. Changes elsewhere in the file don't trigger staleness.
+An anchor like `src/auth/provider.ts#AuthConfig` resolves to a specific AST symbol rather than the whole file. drift parses the file with tree-sitter, finds the symbol's declaration, and hashes its content. Changes elsewhere in the file don't trigger staleness.
 
 Resolution uses tree-sitter `.scm` queries per language. A simple query finds named declarations:
 
@@ -76,7 +76,7 @@ Resolution uses tree-sitter `.scm` queries per language. A simple query finds na
 
 Filter captures where `@name` matches the target symbol. Extract `@definition` node text. Hash it.
 
-If the symbol is not found, the binding is reported as STALE with reason "symbol not found".
+If the symbol is not found, the anchor is reported as STALE with reason "symbol not found".
 
 ### Dependencies
 
@@ -84,13 +84,13 @@ Specs can depend on other specs via `<!-- depends: path/to/other.md -->` comment
 
 ## Staleness Detection
 
-For each spec, drift determines staleness by comparing VCS history. Provenance is per-binding: each binding's `@change` suffix records the last change where that binding was addressed.
+For each spec, drift determines staleness by comparing VCS history. Provenance is per-anchor: each anchor's `@change` suffix records the last change where that anchor was addressed.
 
-1. For each binding, determine its baseline — the binding's provenance change if present, otherwise the last commit that modified the spec file
-2. Check the binding against its baseline:
+1. For each anchor, determine its baseline — the anchor's provenance change if present, otherwise the last commit that modified the spec file
+2. Check the anchor against its baseline:
    - **File-level**: was this file modified in any commit after the baseline?
    - **Symbol-level**: parse the file, hash the symbol content, compare against the hash at the baseline
-3. If any binding has changed after its baseline, the spec is stale
+3. If any anchor has changed after its baseline, the spec is stale
 
 The VCS query is:
 ```
@@ -102,7 +102,7 @@ In jj:
 jj log -r '<baseline>..@' --no-graph -T 'change_id' -- <bound-file>
 ```
 
-Because provenance is per-binding, updating one binding's change reference doesn't affect staleness detection for other bindings in the same spec. A spec with three bindings can have two fresh and one stale.
+Because provenance is per-anchor, updating one anchor's change reference doesn't affect staleness detection for other anchors in the same spec. A spec with three anchors can have two fresh and one stale.
 
 ### Blame Enrichment
 
@@ -117,9 +117,9 @@ docs/auth.md
 
 This is a free byproduct of the VCS query — `git log` gives author and message.
 
-### Missing Bindings
+### Missing Anchors
 
-If a file binding can't be resolved (file doesn't exist), it's reported as STALE with reason "file not found":
+If a file anchor can't be resolved (file doesn't exist), it's reported as STALE with reason "file not found":
 
 ```
 docs/auth.md
@@ -127,7 +127,7 @@ docs/auth.md
           file not found
 ```
 
-If a symbol binding can't be resolved (symbol not found in file), it's reported as STALE with reason "symbol not found":
+If a symbol anchor can't be resolved (symbol not found in file), it's reported as STALE with reason "symbol not found":
 
 ```
 docs/auth.md
@@ -150,7 +150,7 @@ docs/auth.md
         │ find spec  │ │ parse    │ │ git log │
         │ files,     │ │ bound    │ │ jj log  │
         │ extract    │ │ files,   │ │ blame   │
-        │ bindings   │ │ hash     │ │         │
+        │ anchors    │ │ hash     │ │         │
         │            │ │ symbols  │ │         │
         └────────────┘ └──────────┘ └─────────┘
               │            │            │
@@ -170,16 +170,16 @@ Additional modules:
 
 ### scanner.zig
 
-Walks the repo looking for markdown files with `drift:` frontmatter. Parses frontmatter to extract explicit bindings. Parses content to extract implicit bindings (`@` references). No index — scans on every run. Performance is bounded by the number of markdown files, not the size of the codebase.
+Walks the repo looking for markdown files with `drift:` frontmatter. Parses frontmatter to extract explicit anchors. Parses content to extract implicit anchors (`@` references). No index — scans on every run. Performance is bounded by the number of markdown files, not the size of the codebase.
 
 ### symbols.zig
 
-For each binding, resolves the current state:
+For each anchor, resolves the current state:
 
 - **File-level**: stat the file, hash its content
 - **Symbol-level**: parse with tree-sitter, find the symbol via `.scm` query, hash the symbol's content
 
-Parsing is on-demand. Only files that are actually bound get parsed. A lint run that checks 10 specs binding to 30 symbols across 20 files does 20 tree-sitter parses — milliseconds.
+Parsing is on-demand. Only files that are actually bound get parsed. A lint run that checks 10 specs anchoring to 30 symbols across 20 files does 20 tree-sitter parses — milliseconds.
 
 ### vcs.zig
 

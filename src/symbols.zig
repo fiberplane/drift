@@ -16,7 +16,7 @@ pub const LanguageQuery = struct {
 };
 
 // Tree-sitter query sources for symbol extraction, embedded as string literals.
-// These match the @name captures in the query patterns to resolve symbol bindings.
+// These match the @name captures in the query patterns to resolve symbol anchors.
 const ts_query_typescript =
     \\[
     \\  (function_declaration
