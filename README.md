@@ -1,6 +1,7 @@
 <!-- drift:
   files:
-    - src/main.zig@mtloqmvz
+    - src/main.zig@xlwuyosp
+
 
 -->
 
@@ -151,7 +152,7 @@ git and jj. Auto-detected from `.jj` or `.git` directory. In jj, the `@change` p
 
 ## Development
 
-Requires Zig 0.15.2. The repo includes a `.tool-versions` file, so if you use [mise](https://mise.jdx.dev/) (or asdf):
+Requires Zig 0.15.2. The repo includes a `.tool-versions` file for [mise](https://mise.jdx.dev/) (or asdf). If you haven't already, [activate mise](https://mise.jdx.dev/getting-started.html#activate-mise) in your shell, then:
 
 ```bash
 mise install        # installs zig 0.15.2
