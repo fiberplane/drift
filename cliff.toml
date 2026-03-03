@@ -37,6 +37,6 @@ commit_parsers = [
   { message = "^ci", skip = true },
   { message = "^Merge", skip = true },
 ]
-filter_commits = false
+filter_commits = true
 tag_pattern = "v[0-9].*"
 sort_commits = "newest"
