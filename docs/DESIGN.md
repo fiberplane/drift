@@ -1,11 +1,11 @@
 ---
 drift:
   files:
-    - src/main.zig@kznzovvs
-    - src/frontmatter.zig@kznzovvs
-    - src/scanner.zig@kznzovvs
-    - src/symbols.zig@kznzovvs
-    - src/vcs.zig@kznzovvs
+    - src/main.zig@nsqnzlrv
+    - src/frontmatter.zig@nsqnzlrv
+    - src/scanner.zig@nsqnzlrv
+    - src/symbols.zig@nsqnzlrv
+    - src/vcs.zig@nsqnzlrv
 ---
 
 # Design

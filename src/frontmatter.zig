@@ -1,5 +1,86 @@
 const std = @import("std");
 
+/// Returns true if `pos` in `text` falls inside a fenced code block or inline code span.
+pub fn isInCodeContext(text: []const u8, pos: usize) bool {
+    var i: usize = 0;
+    var in_fence = false;
+
+    while (i < text.len and i <= pos) {
+        // Fenced code blocks: ``` or ~~~ at line start (optionally indented up to 3 spaces)
+        if (i == 0 or (i > 0 and text[i - 1] == '\n')) {
+            var fi = i;
+            var spaces: usize = 0;
+            while (fi < text.len and text[fi] == ' ' and spaces < 3) {
+                fi += 1;
+                spaces += 1;
+            }
+            if (fi < text.len and (text[fi] == '`' or text[fi] == '~')) {
+                const fence_char = text[fi];
+                var fence_len: usize = 0;
+                while (fi + fence_len < text.len and text[fi + fence_len] == fence_char) fence_len += 1;
+                if (fence_len >= 3) {
+                    in_fence = !in_fence;
+                    var skip = fi + fence_len;
+                    while (skip < text.len and text[skip] != '\n') skip += 1;
+                    if (skip < text.len) skip += 1;
+                    if (pos < skip) return in_fence;
+                    i = skip;
+                    continue;
+                }
+            }
+        }
+
+        if (in_fence) {
+            if (i == pos) return true;
+            if (text[i] == '\n') {
+                i += 1;
+            } else {
+                while (i < text.len and text[i] != '\n') i += 1;
+                if (i < text.len) i += 1;
+            }
+            continue;
+        }
+
+        // Inline code: `...` or ``...``
+        if (text[i] == '`') {
+            var open_count: usize = 0;
+            var oi = i;
+            while (oi < text.len and text[oi] == '`') {
+                oi += 1;
+                open_count += 1;
+            }
+            // Search for matching closing backtick sequence
+            var si = oi;
+            while (si < text.len) {
+                if (text[si] == '`') {
+                    var ci = si;
+                    var close_count: usize = 0;
+                    while (ci < text.len and text[ci] == '`') {
+                        ci += 1;
+                        close_count += 1;
+                    }
+                    if (close_count == open_count) {
+                        if (pos >= i and pos < ci) return true;
+                        i = ci;
+                        break;
+                    }
+                    si = ci;
+                } else {
+                    si += 1;
+                }
+            }
+            if (si >= text.len) {
+                i = oi; // no matching close, treat backticks as literal
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+
+    return in_fence;
+}
+
 /// Extract the file identity from a binding string: strip `@change` suffix but keep `#Symbol`.
 /// E.g. "src/file.ts@abc" -> "src/file.ts", "src/lib.ts#Foo@abc" -> "src/lib.ts#Foo"
 pub fn bindingFileIdentity(binding: []const u8) []const u8 {
@@ -107,7 +188,15 @@ fn parseCommentBindings(allocator: std.mem.Allocator, content: []const u8) ?std.
     var pos: usize = 0;
     while (pos < content.len) {
         const marker_offset = std.mem.indexOf(u8, content[pos..], marker) orelse break;
-        const block_start = pos + marker_offset + marker.len;
+        const abs_marker_pos = pos + marker_offset;
+
+        // Skip markers inside fenced code blocks or inline code spans
+        if (isInCodeContext(content, abs_marker_pos)) {
+            pos = abs_marker_pos + marker.len;
+            continue;
+        }
+
+        const block_start = abs_marker_pos + marker.len;
 
         const close_offset = std.mem.indexOf(u8, content[block_start..], "-->") orelse break;
         const block_content = content[block_start .. block_start + close_offset];
@@ -154,9 +243,17 @@ fn parseCommentBindings(allocator: std.mem.Allocator, content: []const u8) ?std.
     return bindings;
 }
 
-/// Check if content has a `<!-- drift: ... -->` comment block.
+/// Check if content has a `<!-- drift: ... -->` comment block outside of code contexts.
 fn hasCommentBindings(content: []const u8) bool {
-    return std.mem.indexOf(u8, content, "<!-- drift:") != null;
+    const marker = "<!-- drift:";
+    var pos: usize = 0;
+    while (pos < content.len) {
+        const marker_offset = std.mem.indexOf(u8, content[pos..], marker) orelse return false;
+        const abs_marker_pos = pos + marker_offset;
+        if (!isInCodeContext(content, abs_marker_pos)) return true;
+        pos = abs_marker_pos + marker.len;
+    }
+    return false;
 }
 
 /// Add or update a binding inside a `<!-- drift: ... -->` comment block.
@@ -164,7 +261,16 @@ fn linkCommentBinding(allocator: std.mem.Allocator, content: []const u8, binding
     const new_identity = bindingFileIdentity(binding);
     const marker = "<!-- drift:";
 
-    const marker_pos = std.mem.indexOf(u8, content, marker) orelse {
+    // Find the first marker outside of code contexts
+    const marker_pos = blk: {
+        var search_pos: usize = 0;
+        while (search_pos < content.len) {
+            const offset = std.mem.indexOf(u8, content[search_pos..], marker) orelse
+                return try allocator.dupe(u8, content);
+            const abs_pos = search_pos + offset;
+            if (!isInCodeContext(content, abs_pos)) break :blk abs_pos;
+            search_pos = abs_pos + marker.len;
+        }
         return try allocator.dupe(u8, content);
     };
     const block_start = marker_pos + marker.len;
@@ -256,6 +362,14 @@ fn relinkCommentBindings(allocator: std.mem.Allocator, content: []const u8, chan
             break;
         };
         const abs_marker_pos = pos + marker_offset;
+
+        // Skip markers inside fenced code blocks or inline code spans
+        if (isInCodeContext(content, abs_marker_pos)) {
+            try writer.writeAll(content[pos .. abs_marker_pos + marker.len]);
+            pos = abs_marker_pos + marker.len;
+            continue;
+        }
+
         const block_start = abs_marker_pos + marker.len;
 
         const close_offset = std.mem.indexOf(u8, content[block_start..], "-->") orelse {
@@ -691,4 +805,32 @@ test "relinkAllBindings updates comment-based bindings" {
     try std.testing.expect(std.mem.indexOf(u8, result, "src/main.zig@newchange") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "src/vcs.zig@newchange") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "@old") == null);
+}
+
+test "parseCommentBindings skips markers inside fenced code blocks" {
+    const allocator = std.testing.allocator;
+    const content =
+        \\<!-- drift:
+        \\  files:
+        \\    - src/real.zig
+        \\-->
+        \\
+        \\# Example
+        \\
+        \\```markdown
+        \\<!-- drift:
+        \\  files:
+        \\    - src/fake.ts
+        \\-->
+        \\```
+    ;
+    const bindings = parseDriftSpec(allocator, content) orelse {
+        return error.TestUnexpectedResult;
+    };
+    defer {
+        for (bindings.items) |b| allocator.free(b);
+        bindings.deinit(allocator);
+    }
+    try std.testing.expectEqual(@as(usize, 1), bindings.items.len);
+    try std.testing.expectEqualStrings("src/real.zig", bindings.items[0]);
 }
