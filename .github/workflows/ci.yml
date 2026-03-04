@@ -50,6 +50,7 @@ jobs:
           - target: x86_64-linux
             runner: ubuntu-22.04
             zig-target: x86_64-linux-gnu
+            zig-cpu: baseline
           - target: aarch64-linux
             runner: ubuntu-22.04
             zig-target: aarch64-linux-gnu
@@ -66,7 +67,7 @@ jobs:
           version: 0.15.2
 
       - name: Build
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig-target }}
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig-target }} ${{ matrix.zig-cpu && format('-Dcpu={0}', matrix.zig-cpu) || '' }}
 
       - name: Package
         run: tar -czf drift-${{ matrix.target }}.tar.gz -C zig-out/bin drift
