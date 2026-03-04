@@ -96,6 +96,7 @@ fn buildTreeSitter(
 
     ts_c_module.addCMacro("_POSIX_C_SOURCE", "200112L");
     ts_c_module.addCMacro("_DEFAULT_SOURCE", "");
+    ts_c_module.addCMacro("NDEBUG", "");
 
     const ts_c_lib = b.addLibrary(.{
         .name = "tree-sitter",
@@ -165,13 +166,13 @@ fn linkGrammars(b: *std.Build, module: *std.Build.Module) void {
 
         module.addCSourceFile(.{
             .file = dep.path(grammar.parser_path),
-            .flags = &.{"-std=c11"},
+            .flags = &.{ "-std=c11", "-DNDEBUG" },
         });
 
         if (grammar.scanner_path) |scanner| {
             module.addCSourceFile(.{
                 .file = dep.path(scanner),
-                .flags = &.{"-std=c11"},
+                .flags = &.{ "-std=c11", "-DNDEBUG" },
             });
         }
     }
