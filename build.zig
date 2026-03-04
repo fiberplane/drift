@@ -79,16 +79,20 @@ fn buildTreeSitter(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Module {
-    // Build the tree-sitter C library as a static library
+    // Build the tree-sitter C library as a static library.
+    // Use ReleaseFast for vendored C code: Zig's ReleaseSafe adds UBSan
+    // to C sources, which causes SIGILL traps in tree-sitter's parser
+    // (tree-sitter has UB that is benign in practice but triggers UBSan).
+    const c_optimize: std.builtin.OptimizeMode = if (optimize == .ReleaseSafe) .ReleaseFast else optimize;
     const ts_c_module = b.createModule(.{
         .target = target,
-        .optimize = optimize,
+        .optimize = c_optimize,
         .link_libc = true,
     });
 
     ts_c_module.addCSourceFile(.{
         .file = b.path("vendor/tree-sitter/lib/src/lib.c"),
-        .flags = &.{"-std=c11"},
+        .flags = &.{ "-std=c11", "-fno-sanitize=undefined" },
     });
 
     ts_c_module.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
@@ -123,6 +127,9 @@ fn buildTreeSitter(
 fn linkGrammars(b: *std.Build, module: *std.Build.Module) void {
     // Tree-sitter headers needed by grammar C sources
     module.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
+
+    // Disable UBSan for grammar C code (same rationale as tree-sitter core)
+    const c_flags: []const []const u8 = &.{ "-std=c11", "-DNDEBUG", "-fno-sanitize=undefined" };
 
     const grammars = [_]struct {
         dep_name: []const u8,
@@ -166,13 +173,13 @@ fn linkGrammars(b: *std.Build, module: *std.Build.Module) void {
 
         module.addCSourceFile(.{
             .file = dep.path(grammar.parser_path),
-            .flags = &.{ "-std=c11", "-DNDEBUG" },
+            .flags = c_flags,
         });
 
         if (grammar.scanner_path) |scanner| {
             module.addCSourceFile(.{
                 .file = dep.path(scanner),
-                .flags = &.{ "-std=c11", "-DNDEBUG" },
+                .flags = c_flags,
             });
         }
     }
