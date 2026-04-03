@@ -29,6 +29,11 @@ const main_parsers = .{
     .command = clap.parsers.enumeration(SubCommand),
 };
 
+const check_params = clap.parseParamsComptime(
+    \\--format <str>
+    \\
+);
+
 const status_params = clap.parseParamsComptime(
     \\--format <str>
     \\
@@ -112,8 +117,17 @@ pub fn main() !void {
     };
 
     switch (command) {
-        .check, .lint => lint.run(allocator, &stdout_w.interface, &stderr_w.interface) catch |err| {
-            exitWithCommandError(&stderr_w.interface, "lint", err);
+        .check, .lint => {
+            var sub = try parseExOrReport(&check_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            defer sub.deinit();
+            if (iter.next()) |_| {
+                stderr_w.interface.print("usage: drift check [--format json]\n", .{}) catch {};
+                return error.InvalidArgument;
+            }
+            const format_json = if (sub.args.format) |f| std.mem.eql(u8, f, "json") else false;
+            lint.run(allocator, &stdout_w.interface, &stderr_w.interface, format_json) catch |err| {
+                exitWithCommandError(&stderr_w.interface, "check", err);
+            };
         },
         .status => {
             var sub = try parseExOrReport(&status_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
