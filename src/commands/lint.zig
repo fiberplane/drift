@@ -7,6 +7,23 @@ const vcs = @import("../vcs.zig");
 
 const Spec = scanner.Spec;
 
+/// Output format for `drift check` / `drift lint`.
+///
+/// Defined here (rather than in main.zig) so the lint command owns its own surface
+/// and other call sites (status.zig, future commands) can import the same enum.
+/// Replaces the previous `format_json: bool` boolean trap — adding sarif/junit/etc.
+/// later only requires extending this enum.
+pub const Format = enum { text, json };
+
+/// Result of a single `run` invocation. The command exits 1 on `.stale` and 0 on `.pass`.
+///
+/// We return this from `run` instead of calling `std.process.exit` directly so that
+/// `defer`-based cleanup (FileCache, CheckResult, GitCatFile, repo_identity) actually
+/// runs before the process dies. `std.process.exit` calls libc `exit`, which does not
+/// unwind Zig defers — previously this leaked allocations on the stale path and tripped
+/// DebugAllocator in test/CI builds.
+pub const RunStatus = enum { pass, stale };
+
 /// Caches current and historical file bytes for one lint run (path -> bytes, rev+path -> bytes).
 const FileCache = struct {
     allocator: std.mem.Allocator,
@@ -73,6 +90,8 @@ const FileCache = struct {
 
 const AnchorResult = enum { fresh, stale, skip };
 
+/// Why an anchor is stale or skipped. The wire format emits `@tagName(code)` so the
+/// JSON consumer never sees a free-form English string for the code itself.
 const ReasonCode = enum {
     none,
     changed_after_baseline,
@@ -84,6 +103,23 @@ const ReasonCode = enum {
     origin_mismatch,
 };
 
+/// Stable, human-readable message for a reason code. This is the *only* mapping from
+/// code → string in the codebase: the text renderer and the `reason.message` JSON field
+/// both call this. Tests assert these exact strings, so changing one is a wire-format
+/// change and should bump `drift.check.v1`.
+fn reasonMessage(code: ReasonCode) []const u8 {
+    return switch (code) {
+        .none => "",
+        .changed_after_baseline => "changed after spec",
+        .file_not_found => "file not found",
+        .file_not_readable => "file not readable",
+        .symbol_not_found => "symbol not found",
+        .fingerprint_unavailable => "cannot compute fingerprint",
+        .baseline_unavailable => "baseline unavailable",
+        .origin_mismatch => "origin mismatch",
+    };
+}
+
 const AnchorCheckResult = struct {
     anchor: []const u8,
     identity: []const u8,
@@ -94,7 +130,6 @@ const AnchorCheckResult = struct {
     provenance_value: ?[]const u8,
     result: AnchorResult,
     reason_code: ReasonCode,
-    reason_message: []const u8,
     blame: ?vcs.BlameInfo,
 };
 
@@ -114,7 +149,9 @@ const SpecCheckResult = struct {
 
 const CheckResult = struct {
     repo: ?[]const u8,
-    checked_at: i64, // unix timestamp ms
+    /// Unix timestamp in milliseconds. Wire field name is `checked_at_ms` so the unit
+    /// is unambiguous to JSON consumers (a bare `checked_at` integer could be s/ms/us/ns).
+    checked_at_ms: i64,
     specs: std.ArrayList(SpecCheckResult),
     summary_result: AnchorResult,
     specs_total: u32,
@@ -130,21 +167,77 @@ const CheckResult = struct {
         for (self.specs.items) |*s| s.deinit(allocator);
         self.specs.deinit(allocator);
     }
-};
 
-// Legacy struct used internally by checkAnchor — maps to AnchorCheckResult.
-const AnchorStatus = struct {
-    label: []const u8,
-    display: []const u8,
-    reason: []const u8,
-    blame: ?vcs.BlameInfo = null,
-
-    fn deinit(self: AnchorStatus, allocator: std.mem.Allocator) void {
-        if (self.blame) |blame| blame.deinit(allocator);
+    /// True when there are specs but every one was skipped (e.g. all origin mismatches).
+    /// Distinct from "pass" because the user got zero verification — the dashboard should
+    /// surface this rather than report a green check.
+    fn fullySkipped(self: *const CheckResult) bool {
+        return self.specs_total > 0 and self.specs_total == self.specs_skipped;
     }
 };
 
-pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format_json: bool) !void {
+/// Outcome of checking a single anchor. Returned by `checkAnchor` and merged into the
+/// model in `run`. Replaces the old `AnchorStatus` struct that carried English label
+/// strings (`"ok"`, `"STALE"`) which `run` then re-parsed via `std.mem.eql` — fragile,
+/// and a future label tweak would silently flip JSON results.
+const AnchorOutcome = struct {
+    result: AnchorResult,
+    reason_code: ReasonCode,
+    blame: ?vcs.BlameInfo = null,
+};
+
+const ParsedAnchor = struct {
+    identity: []const u8,
+    file_path: []const u8,
+    symbol_name: ?[]const u8,
+    /// Raw provenance suffix (everything after the first `@`), or null when no `@` is present.
+    provenance: ?[]const u8,
+    provenance_kind: ?[]const u8,
+    provenance_value: ?[]const u8,
+};
+
+/// Single source of truth for splitting an anchor string into its parts. Both
+/// `checkAnchor` (for staleness logic) and `run` (for building the JSON model) call this,
+/// so the parsing rules can never drift between the two paths.
+fn parseAnchor(anchor: []const u8) ParsedAnchor {
+    const identity = frontmatter.anchorFileIdentity(anchor);
+    const provenance: ?[]const u8 = if (identity.len < anchor.len)
+        anchor[identity.len + 1 ..] // skip the `@` separator that anchorFileIdentity stopped at
+    else
+        null;
+
+    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
+    const file_path = if (hash_pos) |pos| identity[0..pos] else identity;
+    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+
+    var provenance_kind: ?[]const u8 = null;
+    var provenance_value: ?[]const u8 = null;
+    if (provenance) |prov| {
+        if (std.mem.startsWith(u8, prov, "sig:")) {
+            provenance_kind = "sig";
+            provenance_value = prov["sig:".len..];
+        } else {
+            provenance_kind = "vcs";
+            provenance_value = prov;
+        }
+    }
+
+    return .{
+        .identity = identity,
+        .file_path = file_path,
+        .symbol_name = symbol_name,
+        .provenance = provenance,
+        .provenance_kind = provenance_kind,
+        .provenance_value = provenance_value,
+    };
+}
+
+pub fn run(
+    allocator: std.mem.Allocator,
+    stdout_w: *std.io.Writer,
+    stderr_w: *std.io.Writer,
+    format: Format,
+) !RunStatus {
     var specs: std.ArrayList(Spec) = .{};
     defer {
         for (specs.items) |*s| s.deinit(allocator);
@@ -170,7 +263,7 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     // Build result model
     var result = CheckResult{
         .repo = repo_identity,
-        .checked_at = std.time.milliTimestamp(),
+        .checked_at_ms = std.time.milliTimestamp(),
         .specs = .{},
         .summary_result = .fresh,
         .specs_total = 0,
@@ -205,7 +298,7 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
             const is_local = if (repo_identity) |ri| std.mem.eql(u8, origin, ri) else false;
             if (!is_local) {
                 for (spec.anchors.items) |anchor| {
-                    const parsed = parseAnchorParts(anchor);
+                    const parsed = parseAnchor(anchor);
                     try spec_result.anchors.append(allocator, .{
                         .anchor = anchor,
                         .identity = parsed.identity,
@@ -216,7 +309,6 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
                         .provenance_value = parsed.provenance_value,
                         .result = .skip,
                         .reason_code = .origin_mismatch,
-                        .reason_message = "origin mismatch",
                         .blame = null,
                     });
                     result.anchors_total += 1;
@@ -237,15 +329,12 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
         defer if (spec_commit) |c| allocator.free(c);
 
         for (spec.anchors.items) |anchor| {
-            const status = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
+            const outcome = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
                 stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
                 return error.LintCheckFailed;
             };
 
-            const parsed = parseAnchorParts(anchor);
-            const anchor_result: AnchorResult = if (std.mem.eql(u8, status.label, "ok")) .fresh else .stale;
-            const reason_code = reasonCodeFromMessage(status.reason);
-
+            const parsed = parseAnchor(anchor);
             try spec_result.anchors.append(allocator, .{
                 .anchor = anchor,
                 .identity = parsed.identity,
@@ -254,14 +343,13 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
                 .anchor_kind = if (parsed.symbol_name != null) "symbol" else "file",
                 .provenance_kind = parsed.provenance_kind,
                 .provenance_value = parsed.provenance_value,
-                .result = anchor_result,
-                .reason_code = reason_code,
-                .reason_message = status.reason,
-                .blame = status.blame,
+                .result = outcome.result,
+                .reason_code = outcome.reason_code,
+                .blame = outcome.blame,
             });
 
             result.anchors_total += 1;
-            switch (anchor_result) {
+            switch (outcome.result) {
                 .fresh => result.anchors_fresh += 1,
                 .stale => {
                     result.anchors_stale += 1;
@@ -283,66 +371,185 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
         try result.specs.append(allocator, spec_result);
     }
 
-    // Render output
-    if (format_json) {
-        writeResultsJson(stdout_w, &result);
-    } else {
-        writeResultsText(stdout_w, &result);
+    // Render output. JSON write errors propagate so a truncated/corrupt payload becomes
+    // a non-zero exit instead of silently emitting an unparseable document — the previous
+    // implementation used `catch return` on every json call and could leave a half-written
+    // object on stdout while still exiting 0.
+    switch (format) {
+        .json => try writeResultsJson(stdout_w, &result),
+        .text => writeResultsText(stdout_w, &result),
     }
 
-    if (result.summary_result == .stale) {
-        stdout_w.flush() catch {};
-        stderr_w.flush() catch {};
-        std.process.exit(1);
-    }
+    return if (result.summary_result == .stale) .stale else .pass;
 }
 
-fn parseAnchorParts(anchor: []const u8) struct {
-    identity: []const u8,
-    file_path: []const u8,
-    symbol_name: ?[]const u8,
-    provenance_kind: ?[]const u8,
-    provenance_value: ?[]const u8,
-} {
-    const identity = frontmatter.anchorFileIdentity(anchor);
-    const provenance_raw: ?[]const u8 = if (identity.len < anchor.len)
-        anchor[identity.len + 1 ..]
-    else
-        null;
-    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-    const file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+fn checkAnchor(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    anchor: []const u8,
+    spec_commit: ?[]const u8,
+    detected_vcs: vcs.VcsKind,
+    cat_file: *vcs.GitCatFile,
+    file_cache: *FileCache,
+) !AnchorOutcome {
+    const parsed = parseAnchor(anchor);
+    const file_path = parsed.file_path;
+    const symbol_name = parsed.symbol_name;
+    const provenance = parsed.provenance;
 
-    var provenance_kind: ?[]const u8 = null;
-    var provenance_value: ?[]const u8 = null;
-    if (provenance_raw) |prov| {
-        if (std.mem.startsWith(u8, prov, "sig:")) {
-            provenance_kind = "sig";
-            provenance_value = prov["sig:".len..];
+    const file_exists = blk: {
+        std.fs.cwd().access(file_path, .{}) catch break :blk false;
+        break :blk true;
+    };
+
+    if (!file_exists) {
+        return .{ .result = .stale, .reason_code = .file_not_found };
+    }
+
+    const needs_current_content = symbol_name != null or provenance != null or spec_commit != null;
+    const file_content: ?[]const u8 = if (needs_current_content) blk: {
+        break :blk file_cache.getCurrent(file_path) orelse {
+            return .{ .result = .stale, .reason_code = .file_not_readable };
+        };
+    } else null;
+
+    if (symbol_name) |sym| {
+        const content = file_content.?;
+
+        const ext = std.fs.path.extension(file_path);
+        if (symbols.languageForExtension(ext)) |lang_query| {
+            if (!symbols.resolveSymbolWithTreeSitter(content, lang_query, sym)) {
+                return .{ .result = .stale, .reason_code = .symbol_not_found };
+            }
         } else {
-            provenance_kind = "vcs";
-            provenance_value = prov;
+            if (std.mem.indexOf(u8, content, sym) == null) {
+                return .{ .result = .stale, .reason_code = .symbol_not_found };
+            }
         }
     }
 
-    return .{
-        .identity = identity,
-        .file_path = file_path,
-        .symbol_name = symbol_name,
-        .provenance_kind = provenance_kind,
-        .provenance_value = provenance_value,
-    };
+    if (provenance) |prov| {
+        if (std.mem.startsWith(u8, prov, "sig:")) {
+            return checkAnchorBySig(allocator, cwd_path, file_path, symbol_name, prov["sig:".len..], spec_commit, detected_vcs, file_content.?);
+        }
+        return checkAnchorByContent(allocator, cwd_path, file_path, symbol_name, prov, spec_commit, detected_vcs, file_content.?, cat_file, file_cache);
+    }
+    if (spec_commit) |commit| {
+        return checkAnchorByContent(allocator, cwd_path, file_path, symbol_name, commit, spec_commit, detected_vcs, file_content.?, cat_file, file_cache);
+    }
+
+    return .{ .result = .fresh, .reason_code = .none };
 }
 
-fn reasonCodeFromMessage(reason: []const u8) ReasonCode {
-    if (reason.len == 0) return .none;
-    if (std.mem.eql(u8, reason, "changed after spec")) return .changed_after_baseline;
-    if (std.mem.eql(u8, reason, "file not found")) return .file_not_found;
-    if (std.mem.eql(u8, reason, "file not readable")) return .file_not_readable;
-    if (std.mem.eql(u8, reason, "symbol not found")) return .symbol_not_found;
-    if (std.mem.eql(u8, reason, "cannot compute fingerprint")) return .fingerprint_unavailable;
-    return .changed_after_baseline;
+fn checkAnchorByContent(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    file_path: []const u8,
+    symbol_name: ?[]const u8,
+    provenance: []const u8,
+    spec_commit: ?[]const u8,
+    detected_vcs: vcs.VcsKind,
+    current_content: []const u8,
+    cat_file: *vcs.GitCatFile,
+    file_cache: *FileCache,
+) !AnchorOutcome {
+    const historical_content = blk: {
+        const from_prov = file_cache.getHistorical(cat_file, provenance, file_path) catch break :blk null;
+        if (from_prov) |content| break :blk content;
+        if (spec_commit) |sc| {
+            const from_spec = file_cache.getHistorical(cat_file, sc, file_path) catch break :blk null;
+            if (from_spec) |content| break :blk content;
+        }
+        break :blk null;
+    };
+
+    if (historical_content == null) {
+        return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+    }
+
+    if (symbol_name) |sym| {
+        const ext = std.fs.path.extension(file_path);
+        const lang_query = symbols.languageForExtension(ext) orelse {
+            if (!std.mem.eql(u8, historical_content.?, current_content)) {
+                return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+            }
+            return .{ .result = .fresh, .reason_code = .none };
+        };
+
+        const current_fingerprint = symbols.fingerprintSymbolSyntax(current_content, lang_query, sym);
+        if (current_fingerprint == null) {
+            return .{ .result = .stale, .reason_code = .symbol_not_found };
+        }
+
+        const historical_fingerprint = symbols.fingerprintSymbolSyntax(historical_content.?, lang_query, sym);
+        if (historical_fingerprint == null) {
+            return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+        }
+
+        if (current_fingerprint.? != historical_fingerprint.?) {
+            return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+        }
+    } else {
+        const ext = std.fs.path.extension(file_path);
+        if (symbols.languageForExtension(ext)) |lang_query| {
+            const current_fingerprint = symbols.fingerprintFileSyntax(current_content, lang_query);
+            const historical_fingerprint = symbols.fingerprintFileSyntax(historical_content.?, lang_query);
+
+            if (current_fingerprint == null or historical_fingerprint == null) {
+                if (!std.mem.eql(u8, historical_content.?, current_content)) {
+                    return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+                }
+            } else if (current_fingerprint.? != historical_fingerprint.?) {
+                return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+            }
+        } else {
+            if (!std.mem.eql(u8, historical_content.?, current_content)) {
+                return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+            }
+        }
+    }
+
+    return .{ .result = .fresh, .reason_code = .none };
 }
+
+fn checkAnchorBySig(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    file_path: []const u8,
+    symbol_name: ?[]const u8,
+    sig_hex: []const u8,
+    spec_commit: ?[]const u8,
+    detected_vcs: vcs.VcsKind,
+    current_content: []const u8,
+) !AnchorOutcome {
+    const fingerprint = symbols.computeFingerprint(current_content, file_path, symbol_name) orelse {
+        return .{ .result = .stale, .reason_code = .fingerprint_unavailable };
+    };
+
+    var hex_buf: [16]u8 = undefined;
+    const current_hex = std.fmt.bufPrint(&hex_buf, "{x:0>16}", .{fingerprint}) catch unreachable;
+
+    if (std.mem.eql(u8, current_hex, sig_hex)) {
+        return .{ .result = .fresh, .reason_code = .none };
+    }
+
+    const blame_rev = spec_commit orelse sig_hex;
+    const blame = vcs.getBlameInfo(allocator, cwd_path, file_path, blame_rev, detected_vcs) catch null;
+    return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
+}
+
+fn staleChangedAfterSpec(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    file_path: []const u8,
+    provenance: []const u8,
+    detected_vcs: vcs.VcsKind,
+) !AnchorOutcome {
+    const blame = vcs.getBlameInfo(allocator, cwd_path, file_path, provenance, detected_vcs) catch null;
+    return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
+}
+
+// --- Renderers ---
 
 fn writeResultsText(stdout_w: *std.io.Writer, result: *const CheckResult) void {
     if (result.specs.items.len == 0) {
@@ -363,8 +570,9 @@ fn writeResultsText(stdout_w: *std.io.Writer, result: *const CheckResult) void {
             switch (a.result) {
                 .stale => {
                     all_ok = false;
-                    if (a.reason_message.len > 0) {
-                        stdout_w.print("  STALE   {s} ({s})\n", .{ a.anchor, a.reason_message }) catch {};
+                    const msg = reasonMessage(a.reason_code);
+                    if (msg.len > 0) {
+                        stdout_w.print("  STALE   {s} ({s})\n", .{ a.anchor, msg }) catch {};
                     } else {
                         stdout_w.print("  STALE   {s}\n", .{a.anchor}) catch {};
                     }
@@ -391,28 +599,39 @@ fn writeResultsText(stdout_w: *std.io.Writer, result: *const CheckResult) void {
     }
 }
 
-fn writeResultsJson(w: *std.io.Writer, result: *const CheckResult) void {
+/// Emit the `drift.check.v1` schema. See `docs/check-json-schema.md` for the wire contract.
+///
+/// Errors propagate (broken pipe, OOM in encoder, full disk) so a truncated payload
+/// becomes a non-zero exit. Do *not* swallow these — a JSON consumer that gets a
+/// half-written document has no way to distinguish "drift exited cleanly with this
+/// content" from "drift died mid-write."
+fn writeResultsJson(w: *std.io.Writer, result: *const CheckResult) !void {
     var jw: std.json.Stringify = .{ .writer = w, .options = .{ .whitespace = .indent_2 } };
 
-    jw.beginObject() catch return;
+    try jw.beginObject();
 
-    jw.objectField("schema_version") catch return;
-    jw.write("drift.check.v1") catch return;
-    jw.objectField("tool") catch return;
-    jw.write("drift") catch return;
-    jw.objectField("tool_version") catch return;
-    jw.write(build_options.version) catch return;
+    try jw.objectField("schema_version");
+    try jw.write("drift.check.v1");
+    try jw.objectField("tool");
+    try jw.write("drift");
+    try jw.objectField("tool_version");
+    try jw.write(build_options.version);
 
-    jw.objectField("repo") catch return;
-    jw.write(result.repo) catch return;
+    try jw.objectField("repo");
+    try jw.write(result.repo);
 
-    jw.objectField("checked_at") catch return;
-    jw.write(result.checked_at) catch return;
+    // Unit-suffixed name (`_ms`) so consumers don't have to guess s/ms/us/ns from
+    // digit counts. Renaming this is a wire-format break — bump schema_version.
+    try jw.objectField("checked_at_ms");
+    try jw.write(result.checked_at_ms);
 
     // Summary
-    jw.objectField("summary") catch return;
-    jw.write(.{
+    try jw.objectField("summary");
+    try jw.write(.{
         .result = if (result.summary_result == .stale) "fail" else "pass",
+        // Distinguishes "all specs passed" from "all specs were skipped (zero verification)".
+        // Consumers that gate on the build should treat fully_skipped as a yellow signal.
+        .fully_skipped = result.fullySkipped(),
         .specs_total = result.specs_total,
         .specs_fresh = result.specs_fresh,
         .specs_stale = result.specs_stale,
@@ -421,79 +640,79 @@ fn writeResultsJson(w: *std.io.Writer, result: *const CheckResult) void {
         .anchors_fresh = result.anchors_fresh,
         .anchors_stale = result.anchors_stale,
         .anchors_skipped = result.anchors_skipped,
-    }) catch return;
+    });
 
     // Specs array
-    jw.objectField("specs") catch return;
-    jw.beginArray() catch return;
+    try jw.objectField("specs");
+    try jw.beginArray();
     for (result.specs.items) |spec| {
-        jw.beginObject() catch return;
+        try jw.beginObject();
 
-        jw.objectField("path") catch return;
-        jw.write(spec.path) catch return;
-        jw.objectField("origin") catch return;
-        jw.write(spec.origin) catch return;
-        jw.objectField("result") catch return;
-        jw.write(anchorResultStr(spec.result)) catch return;
+        try jw.objectField("path");
+        try jw.write(spec.path);
+        try jw.objectField("origin");
+        try jw.write(spec.origin);
+        try jw.objectField("result");
+        try jw.write(anchorResultStr(spec.result));
 
-        jw.objectField("anchors") catch return;
-        jw.beginArray() catch return;
+        try jw.objectField("anchors");
+        try jw.beginArray();
         for (spec.anchors.items) |a| {
-            jw.beginObject() catch return;
+            try jw.beginObject();
 
-            jw.objectField("identity") catch return;
-            jw.write(a.identity) catch return;
-            jw.objectField("raw") catch return;
-            jw.write(a.anchor) catch return;
-            jw.objectField("kind") catch return;
-            jw.write(a.anchor_kind) catch return;
-            jw.objectField("path") catch return;
-            jw.write(a.path) catch return;
-            jw.objectField("symbol") catch return;
-            jw.write(a.symbol) catch return;
+            try jw.objectField("identity");
+            try jw.write(a.identity);
+            try jw.objectField("raw");
+            try jw.write(a.anchor);
+            try jw.objectField("kind");
+            try jw.write(a.anchor_kind);
+            try jw.objectField("path");
+            try jw.write(a.path);
+            try jw.objectField("symbol");
+            try jw.write(a.symbol);
 
-            jw.objectField("provenance") catch return;
+            try jw.objectField("provenance");
             if (a.provenance_kind) |pk| {
-                jw.write(.{ .kind = pk, .value = a.provenance_value }) catch return;
+                try jw.write(.{ .kind = pk, .value = a.provenance_value });
             } else {
-                jw.write(null) catch return;
+                try jw.write(null);
             }
 
-            jw.objectField("result") catch return;
-            jw.write(anchorResultStr(a.result)) catch return;
+            try jw.objectField("result");
+            try jw.write(anchorResultStr(a.result));
 
-            jw.objectField("reason") catch return;
+            try jw.objectField("reason");
             if (a.reason_code != .none) {
-                jw.write(.{
+                try jw.write(.{
                     .code = @tagName(a.reason_code),
-                    .message = a.reason_message,
-                }) catch return;
+                    .message = reasonMessage(a.reason_code),
+                });
             } else {
-                jw.write(null) catch return;
+                try jw.write(null);
             }
 
-            jw.objectField("blame") catch return;
+            try jw.objectField("blame");
             if (a.blame) |blame| {
-                jw.write(.{
+                try jw.write(.{
                     .author = blame.author,
                     .commit = blame.commit_hash,
                     .date = blame.date,
                     .subject = blame.subject,
-                }) catch return;
+                });
             } else {
-                jw.write(null) catch return;
+                try jw.write(null);
             }
 
-            jw.endObject() catch return;
+            try jw.endObject();
         }
-        jw.endArray() catch return;
+        try jw.endArray();
 
-        jw.endObject() catch return;
+        try jw.endObject();
     }
-    jw.endArray() catch return;
+    try jw.endArray();
 
-    jw.endObject() catch return;
-    w.writeByte('\n') catch {};
+    try jw.endObject();
+    try w.writeByte('\n');
 }
 
 fn anchorResultStr(r: AnchorResult) []const u8 {
@@ -501,233 +720,5 @@ fn anchorResultStr(r: AnchorResult) []const u8 {
         .fresh => "fresh",
         .stale => "stale",
         .skip => "skip",
-    };
-}
-
-fn checkAnchor(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    anchor: []const u8,
-    spec_commit: ?[]const u8,
-    detected_vcs: vcs.VcsKind,
-    cat_file: *vcs.GitCatFile,
-    file_cache: *FileCache,
-) !AnchorStatus {
-    const identity = frontmatter.anchorFileIdentity(anchor);
-    const provenance: ?[]const u8 = if (identity.len < anchor.len)
-        anchor[identity.len + 1 ..]
-    else
-        null;
-
-    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-    const file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
-
-    const file_exists = blk: {
-        std.fs.cwd().access(file_path, .{}) catch break :blk false;
-        break :blk true;
-    };
-
-    if (!file_exists) {
-        return .{
-            .label = "STALE",
-            .display = anchor,
-            .reason = "file not found",
-        };
-    }
-
-    const needs_current_content = symbol_name != null or provenance != null or spec_commit != null;
-    const file_content: ?[]const u8 = if (needs_current_content) blk: {
-        break :blk file_cache.getCurrent(file_path) orelse {
-            return .{
-                .label = "STALE",
-                .display = anchor,
-                .reason = "file not readable",
-            };
-        };
-    } else null;
-
-    if (symbol_name) |sym| {
-        const content = file_content.?;
-
-        const ext = std.fs.path.extension(file_path);
-        if (symbols.languageForExtension(ext)) |lang_query| {
-            if (!symbols.resolveSymbolWithTreeSitter(content, lang_query, sym)) {
-                return .{
-                    .label = "STALE",
-                    .display = anchor,
-                    .reason = "symbol not found",
-                };
-            }
-        } else {
-            if (std.mem.indexOf(u8, content, sym) == null) {
-                return .{
-                    .label = "STALE",
-                    .display = anchor,
-                    .reason = "symbol not found",
-                };
-            }
-        }
-    }
-
-    if (provenance) |prov| {
-        if (std.mem.startsWith(u8, prov, "sig:")) {
-            return checkAnchorBySig(allocator, cwd_path, anchor, file_path, symbol_name, prov["sig:".len..], spec_commit, detected_vcs, file_content.?);
-        }
-        return checkAnchorByContent(allocator, cwd_path, anchor, file_path, symbol_name, prov, spec_commit, detected_vcs, file_content.?, cat_file, file_cache);
-    }
-    if (spec_commit) |commit| {
-        return checkAnchorByContent(allocator, cwd_path, anchor, file_path, symbol_name, commit, spec_commit, detected_vcs, file_content.?, cat_file, file_cache);
-    }
-
-    return .{
-        .label = "ok",
-        .display = anchor,
-        .reason = "",
-    };
-}
-
-fn checkAnchorByContent(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    anchor: []const u8,
-    file_path: []const u8,
-    symbol_name: ?[]const u8,
-    provenance: []const u8,
-    spec_commit: ?[]const u8,
-    detected_vcs: vcs.VcsKind,
-    current_content: []const u8,
-    cat_file: *vcs.GitCatFile,
-    file_cache: *FileCache,
-) !AnchorStatus {
-    const historical_content = blk: {
-        const from_prov = file_cache.getHistorical(cat_file, provenance, file_path) catch break :blk null;
-        if (from_prov) |content| break :blk content;
-        if (spec_commit) |sc| {
-            const from_spec = file_cache.getHistorical(cat_file, sc, file_path) catch break :blk null;
-            if (from_spec) |content| break :blk content;
-        }
-        break :blk null;
-    };
-
-    if (historical_content == null) {
-        return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-    }
-
-    if (symbol_name) |sym| {
-        const ext = std.fs.path.extension(file_path);
-        const lang_query = symbols.languageForExtension(ext) orelse {
-            if (!std.mem.eql(u8, historical_content.?, current_content)) {
-                return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-            }
-            return .{
-                .label = "ok",
-                .display = anchor,
-                .reason = "",
-            };
-        };
-
-        const current_fingerprint = symbols.fingerprintSymbolSyntax(current_content, lang_query, sym);
-        if (current_fingerprint == null) {
-            return .{
-                .label = "STALE",
-                .display = anchor,
-                .reason = "symbol not found",
-            };
-        }
-
-        const historical_fingerprint = symbols.fingerprintSymbolSyntax(historical_content.?, lang_query, sym);
-        if (historical_fingerprint == null) {
-            return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-        }
-
-        if (current_fingerprint.? != historical_fingerprint.?) {
-            return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-        }
-    } else {
-        const ext = std.fs.path.extension(file_path);
-        if (symbols.languageForExtension(ext)) |lang_query| {
-            const current_fingerprint = symbols.fingerprintFileSyntax(current_content, lang_query);
-            const historical_fingerprint = symbols.fingerprintFileSyntax(historical_content.?, lang_query);
-
-            if (current_fingerprint == null or historical_fingerprint == null) {
-                if (!std.mem.eql(u8, historical_content.?, current_content)) {
-                    return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-                }
-            } else if (current_fingerprint.? != historical_fingerprint.?) {
-                return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-            }
-        } else {
-            if (!std.mem.eql(u8, historical_content.?, current_content)) {
-                return staleChangedAfterSpec(allocator, cwd_path, anchor, file_path, provenance, detected_vcs);
-            }
-        }
-    }
-
-    return .{
-        .label = "ok",
-        .display = anchor,
-        .reason = "",
-    };
-}
-
-fn checkAnchorBySig(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    anchor: []const u8,
-    file_path: []const u8,
-    symbol_name: ?[]const u8,
-    sig_hex: []const u8,
-    spec_commit: ?[]const u8,
-    detected_vcs: vcs.VcsKind,
-    current_content: []const u8,
-) !AnchorStatus {
-    const fingerprint = symbols.computeFingerprint(current_content, file_path, symbol_name) orelse {
-        return .{
-            .label = "STALE",
-            .display = anchor,
-            .reason = "cannot compute fingerprint",
-        };
-    };
-
-    var hex_buf: [16]u8 = undefined;
-    const current_hex = std.fmt.bufPrint(&hex_buf, "{x:0>16}", .{fingerprint}) catch unreachable;
-
-    if (std.mem.eql(u8, current_hex, sig_hex)) {
-        return .{
-            .label = "ok",
-            .display = anchor,
-            .reason = "",
-        };
-    }
-
-    const blame_rev = spec_commit orelse sig_hex;
-    const blame = vcs.getBlameInfo(allocator, cwd_path, file_path, blame_rev, detected_vcs) catch null;
-    errdefer if (blame) |b| b.deinit(allocator);
-
-    return .{
-        .label = "STALE",
-        .display = anchor,
-        .reason = "changed after spec",
-        .blame = blame,
-    };
-}
-
-fn staleChangedAfterSpec(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    anchor: []const u8,
-    file_path: []const u8,
-    provenance: []const u8,
-    detected_vcs: vcs.VcsKind,
-) !AnchorStatus {
-    const blame = vcs.getBlameInfo(allocator, cwd_path, file_path, provenance, detected_vcs) catch null;
-    errdefer if (blame) |b| b.deinit(allocator);
-
-    return .{
-        .label = "STALE",
-        .display = anchor,
-        .reason = "changed after spec",
-        .blame = blame,
     };
 }

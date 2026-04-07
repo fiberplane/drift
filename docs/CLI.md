@@ -6,15 +6,17 @@ drift:
 
 # CLI Reference
 
-`drift status` supports `--format json` for tool integration. Usage and command errors exit non-zero.
+`drift check` and `drift status` both support `--format <text|json>` for tool integration (default `text`). The JSON wire format is documented in [`check-json-schema.md`](./check-json-schema.md) (`drift.check.v1`). Usage and command errors exit non-zero. An unknown `--format` value is rejected with an error rather than falling through to the text path.
 
 ## drift check / drift lint
 
 Check all specs for staleness. The primary command. Exits 1 if any anchor is stale. `drift lint` is an alias.
 
 ```
-drift check
+drift check [--format text|json]
 ```
+
+The JSON output emits the `drift.check.v1` schema with summary counts, per-spec results, per-anchor reason codes, and (best-effort) git blame on stale anchors. The exit code is the same as the text path: 0 on pass, 1 on stale. Errors writing the JSON payload (broken pipe, encoder failure) exit non-zero rather than emitting a truncated document. See [`check-json-schema.md`](./check-json-schema.md) for the full schema.
 
 Scans the repo for git-tracked markdown files with `drift:` frontmatter or `<!-- drift: ... -->` HTML comments. For each spec, checks if any bound file was modified after the spec. Reports stale anchors with reasons.
 
