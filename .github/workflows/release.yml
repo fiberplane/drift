@@ -12,8 +12,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guard:
+    name: Verify tag is on main
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check tag points to a commit on main
+        run: |
+          TAG_COMMIT=$(git rev-list -n1 "$GITHUB_REF")
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME does not point to a commit on main. Aborting release."
+            exit 1
+          fi
+
   generate-notes:
     name: Generate release notes
+    needs: [guard]
     runs-on: ubuntu-22.04
     outputs:
       body: ${{ steps.cliff.outputs.content }}
@@ -31,6 +47,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
+    needs: [guard]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -85,7 +102,7 @@ jobs:
 
   release:
     name: Create release
-    needs: [generate-notes, build]
+    needs: [guard, generate-notes, build]
     runs-on: ubuntu-22.04
     steps:
       - name: Download all artifacts

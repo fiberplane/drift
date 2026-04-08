@@ -43,7 +43,7 @@ Types `chore`, `style`, and `ci` are excluded from changelogs. Merge commits are
    jj tag set vX.Y.Z -r main
    GIT_DIR=.git git push origin vX.Y.Z
    ```
-3. The tag push triggers `.github/workflows/release.yml`, which:
+3. The tag push triggers `.github/workflows/release.yml`, which first verifies the tag points to a commit on `main` (tags on feature branches are rejected), then:
    - Generates release notes with git-cliff (grouped by Features, Bug Fixes, Documentation, Refactor)
    - Cross-compiles for all 4 targets with Zig 0.15.2
    - Creates a GitHub release with the generated notes, all tarballs, and matching `.sha256` checksum files attached
