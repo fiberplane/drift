@@ -128,7 +128,9 @@ drift:
 
 ## Staleness
 
-`drift check` exits 1 if any anchor is stale. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won't trigger staleness. Stale reports include git blame info (author, commit, message) so you know what changed and why.
+`drift check` exits 1 if any anchor is stale. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won't trigger staleness. Stale reports include git blame–style context (who last touched the line of interest, which commit, subject) so you can see what changed.
+
+For `--format json`, the payload is `schema_version: drift.check.v1` (see the repo’s `docs/check-json-schema.md`). There, `blame.date` is the **committer** date in ISO 8601 strict form, not author date — use it when you need a stable time ordering after rebases. The summary includes `verification_state` (`none` | `partial` | `full`) describing how many specs were actually checked versus skipped (e.g. origin mismatch).
 
 Reasons:
 - **changed after spec** — file/symbol content differs from provenance snapshot
