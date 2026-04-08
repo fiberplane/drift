@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const drift_check_v1 = @import("payload");
 const frontmatter = @import("../frontmatter.zig");
 const scanner = @import("../scanner.zig");
 const symbols = @import("../symbols.zig");
@@ -106,7 +107,7 @@ const ReasonCode = enum {
 /// Stable, human-readable message for a reason code. This is the *only* mapping from
 /// code → string in the codebase: the text renderer and the `reason.message` JSON field
 /// both call this. Tests assert these exact strings, so changing one is a wire-format
-/// change and should bump `drift.check.v1`.
+/// change and should bump `drift.check.v1`, update `docs/schemas/`, and `src/payload/drift_check_v1.zig`.
 fn reasonMessage(code: ReasonCode) []const u8 {
     return switch (code) {
         .none => "",
@@ -120,29 +121,32 @@ fn reasonMessage(code: ReasonCode) []const u8 {
     };
 }
 
-const AnchorCheckResult = struct {
-    anchor: []const u8,
-    identity: []const u8,
-    path: []const u8,
-    symbol: ?[]const u8,
-    anchor_kind: []const u8, // "file" or "symbol"
-    provenance_kind: ?[]const u8,
-    provenance_value: ?[]const u8,
-    result: AnchorResult,
-    reason_code: ReasonCode,
-    blame: ?vcs.BlameInfo,
+fn anchorResultStr(r: AnchorResult) []const u8 {
+    return switch (r) {
+        .fresh => "fresh",
+        .stale => "stale",
+        .skip => "skip",
+    };
+}
+
+/// One JSON anchor row: wire payload plus owned blame storage when `wire.blame` is non-null.
+const JsonAnchorRow = struct {
+    blame_storage: ?vcs.BlameInfo,
+    wire: drift_check_v1.Anchor,
+
+    fn deinit(self: *JsonAnchorRow, allocator: std.mem.Allocator) void {
+        if (self.blame_storage) |b| b.deinit(allocator);
+    }
 };
 
 const SpecCheckResult = struct {
     path: []const u8,
     origin: ?[]const u8,
     result: AnchorResult, // worst of all anchors: stale > skip > fresh
-    anchors: std.ArrayList(AnchorCheckResult),
+    anchors: std.ArrayList(JsonAnchorRow),
 
     fn deinit(self: *SpecCheckResult, allocator: std.mem.Allocator) void {
-        for (self.anchors.items) |*a| {
-            if (a.blame) |b| b.deinit(allocator);
-        }
+        for (self.anchors.items) |*a| a.deinit(allocator);
         self.anchors.deinit(allocator);
     }
 };
@@ -168,12 +172,30 @@ const CheckResult = struct {
         self.specs.deinit(allocator);
     }
 
-    /// True when there are specs but every one was skipped (e.g. all origin mismatches).
-    /// Distinct from "pass" because the user got zero verification — the dashboard should
-    /// surface this rather than report a green check.
-    fn fullySkipped(self: *const CheckResult) bool {
-        return self.specs_total > 0 and self.specs_total == self.specs_skipped;
+    /// `specs_fresh + specs_stale` — specs that were actually verified (not skipped).
+    fn specsChecked(self: *const CheckResult) u32 {
+        return self.specs_fresh + self.specs_stale;
     }
+
+    /// Coverage of verification across discovered specs. See `docs/check-json-schema.md`.
+    fn verificationState(self: *const CheckResult) []const u8 {
+        const checked = self.specsChecked();
+        if (self.specs_total > 0 and checked == 0) return "none";
+        if (checked > 0 and self.specs_skipped > 0) return "partial";
+        return "full";
+    }
+};
+
+/// Human-readable output streams one spec at a time; `summary_stale` drives exit status.
+const TextSinkState = struct {
+    writer: *std.io.Writer,
+    summary_stale: bool = false,
+};
+
+/// Where anchor rows go: text prints immediately (bounded memory); JSON buffers `CheckResult`.
+const LintSink = union(enum) {
+    text: *TextSinkState,
+    json: *CheckResult,
 };
 
 /// Outcome of checking a single anchor. Returned by `checkAnchor` and merged into the
@@ -232,6 +254,58 @@ fn parseAnchor(anchor: []const u8) ParsedAnchor {
     };
 }
 
+fn driftProvenance(parsed: ParsedAnchor) ?drift_check_v1.Provenance {
+    if (parsed.provenance_kind) |pk| {
+        return .{ .kind = pk, .value = parsed.provenance_value.? };
+    }
+    return null;
+}
+
+fn driftReason(code: ReasonCode) ?drift_check_v1.Reason {
+    if (code == .none) return null;
+    return .{ .code = @tagName(code), .message = reasonMessage(code) };
+}
+
+fn jsonAnchorFromOutcome(anchor: []const u8, parsed: ParsedAnchor, outcome: AnchorOutcome) JsonAnchorRow {
+    const blame_storage = outcome.blame;
+    return .{
+        .blame_storage = blame_storage,
+        .wire = .{
+            .identity = parsed.identity,
+            .raw = anchor,
+            .kind = if (parsed.symbol_name != null) "symbol" else "file",
+            .path = parsed.file_path,
+            .symbol = parsed.symbol_name,
+            .provenance = driftProvenance(parsed),
+            .result = anchorResultStr(outcome.result),
+            .reason = driftReason(outcome.reason_code),
+            .blame = if (blame_storage) |b| drift_check_v1.Blame{
+                .author = b.author,
+                .commit = b.commit_hash,
+                .date = b.date,
+                .subject = b.subject,
+            } else null,
+        },
+    };
+}
+
+fn jsonAnchorOriginMismatch(anchor: []const u8, parsed: ParsedAnchor) JsonAnchorRow {
+    return .{
+        .blame_storage = null,
+        .wire = .{
+            .identity = parsed.identity,
+            .raw = anchor,
+            .kind = if (parsed.symbol_name != null) "symbol" else "file",
+            .path = parsed.file_path,
+            .symbol = parsed.symbol_name,
+            .provenance = driftProvenance(parsed),
+            .result = "skip",
+            .reason = driftReason(.origin_mismatch),
+            .blame = null,
+        },
+    };
+}
+
 pub fn run(
     allocator: std.mem.Allocator,
     stdout_w: *std.io.Writer,
@@ -260,64 +334,84 @@ pub fn run(
     const repo_identity = vcs.getRepoIdentity(allocator, cwd_path);
     defer if (repo_identity) |ri| allocator.free(ri);
 
-    // Build result model
-    var result = CheckResult{
-        .repo = repo_identity,
-        .checked_at_ms = std.time.milliTimestamp(),
-        .specs = .{},
-        .summary_result = .fresh,
-        .specs_total = 0,
-        .specs_fresh = 0,
-        .specs_stale = 0,
-        .specs_skipped = 0,
-        .anchors_total = 0,
-        .anchors_fresh = 0,
-        .anchors_stale = 0,
-        .anchors_skipped = 0,
+    var text_sink_state = TextSinkState{ .writer = stdout_w };
+
+    var json_result: CheckResult = undefined;
+    const json_result_init = format == .json;
+    if (json_result_init) {
+        json_result = .{
+            .repo = repo_identity,
+            .checked_at_ms = std.time.milliTimestamp(),
+            .specs = .{},
+            .summary_result = .fresh,
+            .specs_total = 0,
+            .specs_fresh = 0,
+            .specs_stale = 0,
+            .specs_skipped = 0,
+            .anchors_total = 0,
+            .anchors_fresh = 0,
+            .anchors_stale = 0,
+            .anchors_skipped = 0,
+        };
+    }
+    defer if (json_result_init) json_result.deinit(allocator);
+
+    const sink: LintSink = switch (format) {
+        .text => .{ .text = &text_sink_state },
+        .json => .{ .json = &json_result },
     };
-    defer result.deinit(allocator);
 
     for (specs.items) |spec| {
-        var spec_result = SpecCheckResult{
-            .path = spec.path,
-            .origin = spec.origin,
-            .result = .fresh,
-            .anchors = .{},
-        };
+        switch (sink) {
+            .text => |ts| ts.writer.print("{s}\n", .{spec.path}) catch {},
+            .json => {},
+        }
 
         if (spec.anchors.items.len == 0) {
-            // No anchors — fresh by default
-            try result.specs.append(allocator, spec_result);
-            result.specs_total += 1;
-            result.specs_fresh += 1;
+            switch (sink) {
+                .text => |ts| ts.writer.print("  ok\n", .{}) catch {},
+                .json => |r| {
+                    try r.specs.append(allocator, .{
+                        .path = spec.path,
+                        .origin = spec.origin,
+                        .result = .fresh,
+                        .anchors = .{},
+                    });
+                    r.specs_total += 1;
+                    r.specs_fresh += 1;
+                },
+            }
             continue;
         }
 
-        // Check origin
         if (spec.origin) |origin| {
             const is_local = if (repo_identity) |ri| std.mem.eql(u8, origin, ri) else false;
             if (!is_local) {
-                for (spec.anchors.items) |anchor| {
-                    const parsed = parseAnchor(anchor);
-                    try spec_result.anchors.append(allocator, .{
-                        .anchor = anchor,
-                        .identity = parsed.identity,
-                        .path = parsed.file_path,
-                        .symbol = parsed.symbol_name,
-                        .anchor_kind = if (parsed.symbol_name != null) "symbol" else "file",
-                        .provenance_kind = parsed.provenance_kind,
-                        .provenance_value = parsed.provenance_value,
-                        .result = .skip,
-                        .reason_code = .origin_mismatch,
-                        .blame = null,
-                    });
-                    result.anchors_total += 1;
-                    result.anchors_skipped += 1;
+                switch (sink) {
+                    .text => {
+                        for (spec.anchors.items) |anchor| {
+                            text_sink_state.writer.print("  SKIP   {s} (origin: {s})\n", .{ anchor, origin }) catch {};
+                        }
+                    },
+                    .json => |r| {
+                        var spec_result = SpecCheckResult{
+                            .path = spec.path,
+                            .origin = spec.origin,
+                            .result = .fresh,
+                            .anchors = .{},
+                        };
+                        for (spec.anchors.items) |anchor| {
+                            const parsed = parseAnchor(anchor);
+                            try spec_result.anchors.append(allocator, jsonAnchorOriginMismatch(anchor, parsed));
+                            r.anchors_total += 1;
+                            r.anchors_skipped += 1;
+                        }
+                        spec_result.result = .skip;
+                        try r.specs.append(allocator, spec_result);
+                        r.specs_total += 1;
+                        r.specs_skipped += 1;
+                    },
                 }
-                spec_result.result = .skip;
-                try result.specs.append(allocator, spec_result);
-                result.specs_total += 1;
-                result.specs_skipped += 1;
                 continue;
             }
         }
@@ -328,59 +422,87 @@ pub fn run(
         };
         defer if (spec_commit) |c| allocator.free(c);
 
-        for (spec.anchors.items) |anchor| {
-            const outcome = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
-                stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
-                return error.LintCheckFailed;
-            };
-
-            const parsed = parseAnchor(anchor);
-            try spec_result.anchors.append(allocator, .{
-                .anchor = anchor,
-                .identity = parsed.identity,
-                .path = parsed.file_path,
-                .symbol = parsed.symbol_name,
-                .anchor_kind = if (parsed.symbol_name != null) "symbol" else "file",
-                .provenance_kind = parsed.provenance_kind,
-                .provenance_value = parsed.provenance_value,
-                .result = outcome.result,
-                .reason_code = outcome.reason_code,
-                .blame = outcome.blame,
-            });
-
-            result.anchors_total += 1;
-            switch (outcome.result) {
-                .fresh => result.anchors_fresh += 1,
-                .stale => {
-                    result.anchors_stale += 1;
-                    spec_result.result = .stale;
-                },
-                .skip => result.anchors_skipped += 1,
-            }
-        }
-
-        result.specs_total += 1;
-        switch (spec_result.result) {
-            .fresh => result.specs_fresh += 1,
-            .stale => {
-                result.specs_stale += 1;
-                result.summary_result = .stale;
+        switch (sink) {
+            .text => {
+                var any_problem = false;
+                for (spec.anchors.items) |anchor| {
+                    const outcome = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
+                        stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
+                        return error.LintCheckFailed;
+                    };
+                    textEmitAnchor(allocator, text_sink_state.writer, spec.origin, anchor, outcome);
+                    switch (outcome.result) {
+                        .fresh => {},
+                        .stale => {
+                            any_problem = true;
+                            text_sink_state.summary_stale = true;
+                        },
+                        .skip => any_problem = true,
+                    }
+                }
+                if (!any_problem) {
+                    text_sink_state.writer.print("  ok\n", .{}) catch {};
+                }
             },
-            .skip => result.specs_skipped += 1,
+            .json => |r| {
+                var spec_result = SpecCheckResult{
+                    .path = spec.path,
+                    .origin = spec.origin,
+                    .result = .fresh,
+                    .anchors = .{},
+                };
+                for (spec.anchors.items) |anchor| {
+                    const outcome = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
+                        stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
+                        return error.LintCheckFailed;
+                    };
+
+                    const parsed = parseAnchor(anchor);
+                    try spec_result.anchors.append(allocator, jsonAnchorFromOutcome(anchor, parsed, outcome));
+
+                    r.anchors_total += 1;
+                    switch (outcome.result) {
+                        .fresh => r.anchors_fresh += 1,
+                        .stale => {
+                            r.anchors_stale += 1;
+                            spec_result.result = .stale;
+                        },
+                        .skip => r.anchors_skipped += 1,
+                    }
+                }
+
+                r.specs_total += 1;
+                switch (spec_result.result) {
+                    .fresh => r.specs_fresh += 1,
+                    .stale => {
+                        r.specs_stale += 1;
+                        r.summary_result = .stale;
+                    },
+                    .skip => r.specs_skipped += 1,
+                }
+                try r.specs.append(allocator, spec_result);
+            },
         }
-        try result.specs.append(allocator, spec_result);
     }
 
-    // Render output. JSON write errors propagate so a truncated/corrupt payload becomes
-    // a non-zero exit instead of silently emitting an unparseable document — the previous
-    // implementation used `catch return` on every json call and could leave a half-written
-    // object on stdout while still exiting 0.
-    switch (format) {
-        .json => try writeResultsJson(stdout_w, &result),
-        .text => writeResultsText(stdout_w, &result),
+    switch (sink) {
+        .text => |ts| {
+            if (specs.items.len == 0) {
+                ts.writer.print("ok\n", .{}) catch {};
+            }
+        },
+        .json => {},
     }
 
-    return if (result.summary_result == .stale) .stale else .pass;
+    // JSON write errors propagate so a truncated/corrupt payload becomes a non-zero exit.
+    if (format == .json) {
+        try writeResultsJson(allocator, stdout_w, &json_result);
+    }
+
+    return switch (format) {
+        .text => if (text_sink_state.summary_stale) .stale else .pass,
+        .json => if (json_result.summary_result == .stale) .stale else .pass,
+    };
 }
 
 fn checkAnchor(
@@ -551,174 +673,92 @@ fn staleChangedAfterSpec(
 
 // --- Renderers ---
 
-fn writeResultsText(stdout_w: *std.io.Writer, result: *const CheckResult) void {
-    if (result.specs.items.len == 0) {
-        stdout_w.print("ok\n", .{}) catch {};
-        return;
-    }
+/// Prints one anchor for text mode and frees `outcome.blame` when present (bounded memory).
+fn textEmitAnchor(
+    allocator: std.mem.Allocator,
+    stdout_w: *std.io.Writer,
+    spec_origin: ?[]const u8,
+    anchor: []const u8,
+    outcome: AnchorOutcome,
+) void {
+    const blame_owned = outcome.blame;
+    defer if (blame_owned) |b| b.deinit(allocator);
 
-    for (result.specs.items) |spec| {
-        stdout_w.print("{s}\n", .{spec.path}) catch {};
-
-        if (spec.anchors.items.len == 0) {
-            stdout_w.print("  ok\n", .{}) catch {};
-            continue;
-        }
-
-        var all_ok = true;
-        for (spec.anchors.items) |a| {
-            switch (a.result) {
-                .stale => {
-                    all_ok = false;
-                    const msg = reasonMessage(a.reason_code);
-                    if (msg.len > 0) {
-                        stdout_w.print("  STALE   {s} ({s})\n", .{ a.anchor, msg }) catch {};
-                    } else {
-                        stdout_w.print("  STALE   {s}\n", .{a.anchor}) catch {};
-                    }
-                    if (a.blame) |blame| {
-                        stdout_w.print("          changed by {s} in {s} ({s})\n", .{ blame.author, blame.commit_hash, blame.date }) catch {};
-                        stdout_w.print("          \"{s}\"\n", .{blame.subject}) catch {};
-                    }
-                },
-                .skip => {
-                    all_ok = false;
-                    if (spec.origin) |origin| {
-                        stdout_w.print("  SKIP   {s} (origin: {s})\n", .{ a.anchor, origin }) catch {};
-                    } else {
-                        stdout_w.print("  SKIP   {s}\n", .{a.anchor}) catch {};
-                    }
-                },
-                .fresh => {},
+    switch (outcome.result) {
+        .stale => {
+            const msg = reasonMessage(outcome.reason_code);
+            if (msg.len > 0) {
+                stdout_w.print("  STALE   {s} ({s})\n", .{ anchor, msg }) catch {};
+            } else {
+                stdout_w.print("  STALE   {s}\n", .{anchor}) catch {};
             }
-        }
-
-        if (all_ok) {
-            stdout_w.print("  ok\n", .{}) catch {};
-        }
+            if (blame_owned) |blame| {
+                stdout_w.print("          changed by {s} in {s} ({s})\n", .{ blame.author, blame.commit_hash, blame.date }) catch {};
+                stdout_w.print("          \"{s}\"\n", .{blame.subject}) catch {};
+            }
+        },
+        .skip => {
+            if (spec_origin) |origin| {
+                stdout_w.print("  SKIP   {s} (origin: {s})\n", .{ anchor, origin }) catch {};
+            } else {
+                stdout_w.print("  SKIP   {s}\n", .{anchor}) catch {};
+            }
+        },
+        .fresh => {},
     }
 }
 
-/// Emit the `drift.check.v1` schema. See `docs/check-json-schema.md` for the wire contract.
+/// Emit the `drift.check.v1` document from `src/payload/drift_check_v1.zig`. See
+/// `docs/check-json-schema.md` and `docs/schemas/drift.check.v1.json`.
 ///
 /// Errors propagate (broken pipe, OOM in encoder, full disk) so a truncated payload
 /// becomes a non-zero exit. Do *not* swallow these — a JSON consumer that gets a
 /// half-written document has no way to distinguish "drift exited cleanly with this
 /// content" from "drift died mid-write."
-fn writeResultsJson(w: *std.io.Writer, result: *const CheckResult) !void {
-    var jw: std.json.Stringify = .{ .writer = w, .options = .{ .whitespace = .indent_2 } };
+fn writeResultsJson(allocator: std.mem.Allocator, w: *std.io.Writer, result: *const CheckResult) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const doc = try checkResultToDriftCheckV1(arena.allocator(), result);
+    try drift_check_v1.writeJson(w, doc);
+}
 
-    try jw.beginObject();
+fn checkResultToDriftCheckV1(arena: std.mem.Allocator, result: *const CheckResult) !drift_check_v1.DriftCheckV1 {
+    const specs = try arena.alloc(drift_check_v1.Spec, result.specs.items.len);
+    for (result.specs.items, specs) |s, *sp| {
+        const anchors = try arena.alloc(drift_check_v1.Anchor, s.anchors.items.len);
+        for (s.anchors.items, anchors) |row, *ap| {
+            ap.* = row.wire;
+        }
+        sp.* = .{
+            .path = s.path,
+            .origin = s.origin,
+            .result = anchorResultStr(s.result),
+            .anchors = anchors,
+        };
+    }
+    return .{
+        .schema_version = "drift.check.v1",
+        .tool = "drift",
+        .tool_version = build_options.version,
+        .repo = result.repo,
+        .checked_at_ms = result.checked_at_ms,
+        .summary = checkResultSummaryWire(result),
+        .specs = specs,
+    };
+}
 
-    try jw.objectField("schema_version");
-    try jw.write("drift.check.v1");
-    try jw.objectField("tool");
-    try jw.write("drift");
-    try jw.objectField("tool_version");
-    try jw.write(build_options.version);
-
-    try jw.objectField("repo");
-    try jw.write(result.repo);
-
-    // Unit-suffixed name (`_ms`) so consumers don't have to guess s/ms/us/ns from
-    // digit counts. Renaming this is a wire-format break — bump schema_version.
-    try jw.objectField("checked_at_ms");
-    try jw.write(result.checked_at_ms);
-
-    // Summary
-    try jw.objectField("summary");
-    try jw.write(.{
+fn checkResultSummaryWire(result: *const CheckResult) drift_check_v1.Summary {
+    return .{
         .result = if (result.summary_result == .stale) "fail" else "pass",
-        // Distinguishes "all specs passed" from "all specs were skipped (zero verification)".
-        // Consumers that gate on the build should treat fully_skipped as a yellow signal.
-        .fully_skipped = result.fullySkipped(),
+        .verification_state = result.verificationState(),
         .specs_total = result.specs_total,
+        .specs_checked = result.specsChecked(),
+        .specs_skipped = result.specs_skipped,
         .specs_fresh = result.specs_fresh,
         .specs_stale = result.specs_stale,
-        .specs_skipped = result.specs_skipped,
         .anchors_total = result.anchors_total,
         .anchors_fresh = result.anchors_fresh,
         .anchors_stale = result.anchors_stale,
         .anchors_skipped = result.anchors_skipped,
-    });
-
-    // Specs array
-    try jw.objectField("specs");
-    try jw.beginArray();
-    for (result.specs.items) |spec| {
-        try jw.beginObject();
-
-        try jw.objectField("path");
-        try jw.write(spec.path);
-        try jw.objectField("origin");
-        try jw.write(spec.origin);
-        try jw.objectField("result");
-        try jw.write(anchorResultStr(spec.result));
-
-        try jw.objectField("anchors");
-        try jw.beginArray();
-        for (spec.anchors.items) |a| {
-            try jw.beginObject();
-
-            try jw.objectField("identity");
-            try jw.write(a.identity);
-            try jw.objectField("raw");
-            try jw.write(a.anchor);
-            try jw.objectField("kind");
-            try jw.write(a.anchor_kind);
-            try jw.objectField("path");
-            try jw.write(a.path);
-            try jw.objectField("symbol");
-            try jw.write(a.symbol);
-
-            try jw.objectField("provenance");
-            if (a.provenance_kind) |pk| {
-                try jw.write(.{ .kind = pk, .value = a.provenance_value });
-            } else {
-                try jw.write(null);
-            }
-
-            try jw.objectField("result");
-            try jw.write(anchorResultStr(a.result));
-
-            try jw.objectField("reason");
-            if (a.reason_code != .none) {
-                try jw.write(.{
-                    .code = @tagName(a.reason_code),
-                    .message = reasonMessage(a.reason_code),
-                });
-            } else {
-                try jw.write(null);
-            }
-
-            try jw.objectField("blame");
-            if (a.blame) |blame| {
-                try jw.write(.{
-                    .author = blame.author,
-                    .commit = blame.commit_hash,
-                    .date = blame.date,
-                    .subject = blame.subject,
-                });
-            } else {
-                try jw.write(null);
-            }
-
-            try jw.endObject();
-        }
-        try jw.endArray();
-
-        try jw.endObject();
-    }
-    try jw.endArray();
-
-    try jw.endObject();
-    try w.writeByte('\n');
-}
-
-fn anchorResultStr(r: AnchorResult) []const u8 {
-    return switch (r) {
-        .fresh => "fresh",
-        .stale => "stale",
-        .skip => "skip",
     };
 }
