@@ -1,45 +1,44 @@
 const std = @import("std");
-const scanner = @import("../scanner.zig");
 const lint = @import("lint.zig");
+const lockfile = @import("../lockfile.zig");
 
-const Spec = scanner.Spec;
 pub const Format = lint.Format;
 
 pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
-    var specs: std.ArrayList(Spec) = .{};
+    _ = stderr_w;
+
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    var lf = try lockfile.discover(allocator, cwd_path);
+    defer lf.deinit(allocator);
+
+    var specs = try lockfile.groupBySpec(allocator, lf.bindings.items);
     defer {
-        for (specs.items) |*s| s.deinit(allocator);
+        for (specs.items) |*spec| spec.deinit(allocator);
         specs.deinit(allocator);
     }
 
-    try scanner.findAndSortSpecs(allocator, &specs);
-
     switch (format) {
-        .json => writeSpecsJson(stdout_w, specs.items),
+        .json => try writeSpecsJson(stdout_w, specs.items),
         .text => writeSpecsText(stdout_w, specs.items),
     }
-
-    _ = stderr_w;
 }
 
-fn writeSpecsText(w: *std.io.Writer, specs: []const Spec) void {
+fn writeSpecsText(w: *std.io.Writer, specs: []const lockfile.SpecBindings) void {
     if (specs.len == 0) return;
 
     for (specs, 0..) |spec, idx| {
         w.print("{s} ({d} anchor{s})\n", .{
             spec.path,
-            spec.anchors.items.len,
-            if (spec.anchors.items.len == 1) "" else "s",
+            spec.bindings.items.len,
+            if (spec.bindings.items.len == 1) "" else "s",
         }) catch {};
 
-        if (spec.origin) |origin| {
-            w.print("  origin: {s}\n", .{origin}) catch {};
-        }
-
-        if (spec.anchors.items.len > 0) {
+        if (spec.bindings.items.len > 0) {
             w.print("  files:\n", .{}) catch {};
-            for (spec.anchors.items) |anchor| {
-                w.print("    - {s}\n", .{anchor}) catch {};
+            for (spec.bindings.items) |binding| {
+                w.print("    - {s}\n", .{binding.target}) catch {};
             }
         }
 
@@ -49,24 +48,22 @@ fn writeSpecsText(w: *std.io.Writer, specs: []const Spec) void {
     }
 }
 
-fn writeSpecsJson(w: *std.io.Writer, specs: []const Spec) void {
+fn writeSpecsJson(w: *std.io.Writer, specs: []const lockfile.SpecBindings) !void {
     var json_w: std.json.Stringify = .{ .writer = w, .options = .{} };
 
-    json_w.beginArray() catch return;
+    try json_w.beginArray();
     for (specs) |spec| {
-        if (spec.origin) |origin| {
-            json_w.write(.{
-                .spec = spec.path,
-                .origin = origin,
-                .files = spec.anchors.items,
-            }) catch return;
-        } else {
-            json_w.write(.{
-                .spec = spec.path,
-                .files = spec.anchors.items,
-            }) catch return;
+        try json_w.beginObject();
+        try json_w.objectField("spec");
+        try json_w.write(spec.path);
+        try json_w.objectField("files");
+        try json_w.beginArray();
+        for (spec.bindings.items) |binding| {
+            try json_w.write(binding.target);
         }
+        try json_w.endArray();
+        try json_w.endObject();
     }
-    json_w.endArray() catch return;
-    w.writeByte('\n') catch {};
+    try json_w.endArray();
+    try w.writeByte('\n');
 }
