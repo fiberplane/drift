@@ -67,6 +67,18 @@ pub fn discover(run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: 
             return try readAtPath(run, scratch, current, candidate, true);
         }
 
+        // Stop at VCS root — don't climb out of the current repository.
+        const has_git = fileExists(try std.fs.path.join(scratch, &.{ current, ".git" }));
+        const has_jj = fileExists(try std.fs.path.join(scratch, &.{ current, ".jj" }));
+        if (has_git or has_jj) {
+            return .{
+                .root_path = try run.dupe(u8, current),
+                .lockfile_path = try std.fs.path.join(run, &.{ current, "drift.lock" }),
+                .exists = false,
+                .bindings = .{},
+            };
+        }
+
         const parent = parentPath(current) orelse {
             return .{
                 .root_path = try run.dupe(u8, resolved_run),
@@ -384,7 +396,7 @@ test "discover returns empty lockfile rooted at start path when missing" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("repo");
+    try tmp.dir.makePath("repo/.git");
 
     const start_path = try tmp.dir.realpathAlloc(allocator, "repo");
     defer allocator.free(start_path);
