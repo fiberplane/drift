@@ -524,6 +524,51 @@ test "check --format rejects unknown values" {
     try helpers.expectContains(result.stderr, "unknown --format");
 }
 
+test "check --changed scopes checking to affected specs" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/auth.md", "# Auth\n");
+    try repo.writeFile("docs/payments.md", "# Payments\n");
+    try repo.writeFile("src/auth/login.ts", "export const login = true;\n");
+    try repo.writeFile("src/payments/stripe.ts", "export const stripe = true;\n");
+    try repo.commit("add docs and sources");
+
+    try linkSpec(&repo, "docs/auth.md", "src/auth/login.ts");
+    try linkSpec(&repo, "docs/payments.md", "src/payments/stripe.ts");
+    try repo.commit("link both specs");
+
+    try repo.writeFile("src/auth/login.ts", "export const login = false;\n");
+    try repo.commit("modify auth source");
+
+    const result = try repo.runDrift(&.{ "check", "--changed", "src/auth" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "docs/auth.md");
+    try helpers.expectNotContains(result.stdout, "docs/payments.md");
+}
+
+test "check --changed returns ok when no bindings match the prefix" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/spec.md", "# Spec\n");
+    try repo.writeFile("src/main.ts", "export const value = 1;\n");
+    try repo.commit("add spec and source");
+
+    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
+    try repo.commit("link spec");
+
+    const result = try repo.runDrift(&.{ "check", "--changed", "src/other" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 0);
+    try helpers.expectContains(result.stdout, "ok");
+}
+
 test "lint --format json works as alias" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);

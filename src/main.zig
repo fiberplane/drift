@@ -31,11 +31,16 @@ const main_parsers = .{
     .command = clap.parsers.enumeration(SubCommand),
 };
 
-// Shared by `check`, `lint`, and `status`. All three accept `--format <text|json>`
-// (default text). Validation lives in `parseFormat` so an unknown value errors out
+// Shared by `status`. Validation lives in `parseFormat` so an unknown value errors out
 // instead of silently falling through to text.
 const format_params = clap.parseParamsComptime(
     \\--format <str>
+    \\
+);
+
+const check_params = clap.parseParamsComptime(
+    \\--format <str>
+    \\--changed <str>
     \\
 );
 
@@ -126,14 +131,14 @@ pub fn main() !void {
 
     switch (command) {
         .check, .lint => {
-            var sub = try parseExOrReport(&format_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = try parseExOrReport(&check_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift check [--format text|json]\n", .{}) catch {};
+                stderr_w.interface.print("usage: drift check [--format text|json] [--changed <path>]\n", .{}) catch {};
                 return error.InvalidArgument;
             }
             const format = try parseFormat(sub.args.format, &stderr_w.interface);
-            const run_status = lint.run(allocator, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
+            const run_status = lint.run(allocator, &stdout_w.interface, &stderr_w.interface, format, sub.args.changed) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "check", err);
             };
             // Exit-on-stale lives here (not in lint.run) so all `defer`s in run unwind
@@ -216,7 +221,7 @@ fn printUsage(w: *std.io.Writer) void {
         \\Usage: drift <command> [options]
         \\
         \\Commands:
-        \\  check     Check all specs for staleness  [--format text|json]
+        \\  check     Check all specs for staleness  [--format text|json] [--changed <path>]
         \\  status    Show all specs and their anchors  [--format text|json]
         \\  link      Add anchors to a spec
         \\  unlink    Remove anchors from a spec

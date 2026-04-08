@@ -212,6 +212,7 @@ pub fn run(
     stdout_w: *std.io.Writer,
     stderr_w: *std.io.Writer,
     format: Format,
+    changed_path: ?[]const u8,
 ) !RunStatus {
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
@@ -231,6 +232,12 @@ pub fn run(
 
     var file_cache = FileCache.init(allocator);
     defer file_cache.deinit();
+
+    const normalized_changed = if (changed_path) |raw|
+        try normalizeChangedPrefix(allocator, lf.root_path, cwd_path, raw)
+    else
+        null;
+    defer if (normalized_changed) |path| allocator.free(path);
 
     var text_sink_state = TextSinkState{ .writer = stdout_w };
 
@@ -259,7 +266,12 @@ pub fn run(
         .json => .{ .json = &json_result },
     };
 
+    var checked_any = false;
     for (spec_groups.items) |spec| {
+        if (normalized_changed) |prefix| {
+            if (!specMatchesChangedPath(spec, prefix)) continue;
+        }
+        checked_any = true;
         switch (sink) {
             .text => |ts| ts.writer.print("{s}\n", .{spec.path}) catch {},
             .json => {},
@@ -338,7 +350,7 @@ pub fn run(
         }
     }
 
-    if (format == .text and spec_groups.items.len == 0) {
+    if (format == .text and !checked_any) {
         stdout_w.print("ok\n", .{}) catch {};
     }
 
@@ -350,6 +362,29 @@ pub fn run(
         .text => if (text_sink_state.summary_stale) .stale else .pass,
         .json => if (json_result.summary_result == .stale) .stale else .pass,
     };
+}
+
+fn specMatchesChangedPath(spec: lockfile.SpecBindings, changed_prefix: []const u8) bool {
+    for (spec.bindings.items) |binding| {
+        const parsed = parseTarget(binding.target, null);
+        if (std.mem.startsWith(u8, parsed.file_path, changed_prefix)) return true;
+    }
+    return false;
+}
+
+fn normalizeChangedPrefix(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    raw_path: []const u8,
+) ![]const u8 {
+    if (std.fs.path.isAbsolute(raw_path)) {
+        return try std.fs.path.relative(allocator, root_path, raw_path);
+    }
+
+    const absolute = try std.fs.path.resolve(allocator, &.{ cwd_path, raw_path });
+    defer allocator.free(absolute);
+    return try std.fs.path.relative(allocator, root_path, absolute);
 }
 
 fn checkBinding(
