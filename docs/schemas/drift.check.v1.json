@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "drift.check.v1.json",
+  "title": "drift check / lint JSON output",
+  "description": "Wire format emitted by `drift check --format json` and `drift lint --format json`. Match top-level `schema_version` to \"drift.check.v1\". Unknown properties may appear in future drift versions; consumers should ignore them. See docs/check-json-schema.md.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "tool",
+    "tool_version",
+    "repo",
+    "checked_at_ms",
+    "summary",
+    "specs"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "drift.check.v1"
+    },
+    "tool": {
+      "type": "string",
+      "const": "drift"
+    },
+    "tool_version": {
+      "type": "string",
+      "description": "Drift binary version string."
+    },
+    "repo": {
+      "description": "Repository identity when detectable (e.g. github:owner/name), else null.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checked_at_ms": {
+      "type": "integer",
+      "description": "Wall-clock time of the run, milliseconds since Unix epoch."
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "specs": {
+      "type": "array",
+      "description": "Discovered specs in scanner order.",
+      "items": {
+        "$ref": "#/$defs/spec"
+      }
+    }
+  },
+  "$defs": {
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "result",
+        "verification_state",
+        "specs_total",
+        "specs_checked",
+        "specs_skipped",
+        "specs_fresh",
+        "specs_stale",
+        "anchors_total",
+        "anchors_fresh",
+        "anchors_stale",
+        "anchors_skipped"
+      ],
+      "properties": {
+        "result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail"
+          ],
+          "description": "fail iff any anchor is stale; mirrors process exit code (0 pass, 1 fail)."
+        },
+        "verification_state": {
+          "type": "string",
+          "enum": [
+            "none",
+            "partial",
+            "full"
+          ],
+          "description": "Coverage of verification: none = all specs skipped; partial = mix; full = nothing skipped (including zero specs)."
+        },
+        "specs_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "specs_checked": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "specs_fresh + specs_stale (specs not skipped)."
+        },
+        "specs_skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "specs_fresh": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "specs_stale": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "anchors_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "anchors_fresh": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "anchors_stale": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "anchors_skipped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "origin",
+        "result",
+        "anchors"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "origin": {
+          "description": "Spec drift.origin frontmatter when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale",
+            "skip"
+          ],
+          "description": "Worst of child anchors; zero anchors => fresh."
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anchor"
+          }
+        }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "identity",
+        "raw",
+        "kind",
+        "path",
+        "symbol",
+        "provenance",
+        "result",
+        "reason",
+        "blame"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "description": "Anchor without @provenance suffix."
+        },
+        "raw": {
+          "type": "string",
+          "description": "Full anchor string from the spec."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "symbol"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Symbol segment when kind is symbol.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "description": "null when anchor has no provenance suffix.",
+          "type": [
+            "null",
+            {
+              "$ref": "#/$defs/provenance"
+            }
+          ]
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale",
+            "skip"
+          ]
+        },
+        "reason": {
+          "description": "null when anchor is fresh.",
+          "type": [
+            "null",
+            {
+              "$ref": "#/$defs/reason"
+            }
+          ]
+        },
+        "blame": {
+          "description": "null when not applicable or unavailable.",
+          "type": [
+            "null",
+            {
+              "$ref": "#/$defs/blame"
+            }
+          ]
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "sig",
+            "vcs"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Machine-stable reason; new values may be added over time."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable English; stable for a given code in drift.check.v1."
+        }
+      }
+    },
+    "blame": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "author",
+        "commit",
+        "date",
+        "subject"
+      ],
+      "properties": {
+        "author": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string",
+          "description": "Full Git object id (40 hex chars for SHA-1)."
+        },
+        "date": {
+          "type": "string",
+          "description": "Committer date, ISO 8601 strict (git --date=iso-strict)."
+        },
+        "subject": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

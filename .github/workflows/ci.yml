@@ -27,8 +27,13 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Build drift
-        run: zig build -Doptimize=ReleaseSafe
+      - name: Build and test
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Check drift.check.v1 JSON schema matches codegen
+        run: |
+          zig build gen-check-schema -Doptimize=ReleaseSafe
+          git diff --exit-code docs/schemas/drift.check.v1.json
 
       - name: Lint specs
         run: ./zig-out/bin/drift lint

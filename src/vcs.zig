@@ -140,7 +140,9 @@ pub fn getFileAtRevision(
 /// Information about the most recent commit that changed a file after a given revision.
 pub const BlameInfo = struct {
     author: []const u8,
+    /// Full object name (`git log` `%H`), not abbreviated.
     commit_hash: []const u8,
+    /// Committer date as ISO 8601 strict (`git --date=iso-strict`), locale-independent.
     date: []const u8,
     subject: []const u8,
 
@@ -169,7 +171,7 @@ pub fn getBlameInfo(
 
             const result = std.process.Child.run(.{
                 .allocator = allocator,
-                .argv = &.{ "git", "log", "-1", "--format=%an%n%h%n%ad%n%s", "--date=format:%b %d", range, "--", file_path },
+                .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", range, "--", file_path },
                 .cwd = cwd_path,
                 .max_output_bytes = 256 * 1024,
             }) catch return null;

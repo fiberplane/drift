@@ -9,6 +9,25 @@ Process exit code is independent of format: **0 if no anchor is stale, 1 otherwi
 Errors writing the JSON payload (broken pipe, encoder failure) cause a non-zero exit
 rather than a silently truncated document.
 
+## JSON Schema (machine-readable)
+
+The same structure is described by a [JSON Schema](https://json-schema.org/)
+([Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core.html)) file:
+
+**[`docs/schemas/drift.check.v1.json`](schemas/drift.check.v1.json)** — generated from the payload types; regenerate with:
+
+```sh
+zig build gen-check-schema
+```
+
+Use it with JSON Schema tooling (e.g. IDE plugins) to check payloads. The canonical Zig
+types live in [`src/payload/drift_check_v1.zig`](../src/payload/drift_check_v1.zig); the
+schema is emitted from those types in [`src/payload/drift_check_schema_gen.zig`](../src/payload/drift_check_schema_gen.zig).
+`drift` writes JSON with `std.json.Stringify.value` from those types. Integration tests parse
+stdout back into `payload.DriftCheckV1` and run `validateJsonDocument`. The schema uses
+`additionalProperties: true` on objects so that future optional top-level or nested
+fields remain valid without updating the schema file immediately.
+
 ## Top-level shape
 
 ```json
@@ -38,11 +57,12 @@ rather than a silently truncated document.
 ```json
 {
   "result": "pass" | "fail",
-  "fully_skipped": false,
+  "verification_state": "none" | "partial" | "full",
   "specs_total": 3,
+  "specs_checked": 2,
+  "specs_skipped": 1,
   "specs_fresh": 2,
   "specs_stale": 0,
-  "specs_skipped": 1,
   "anchors_total": 7,
   "anchors_fresh": 5,
   "anchors_stale": 0,
@@ -52,11 +72,18 @@ rather than a silently truncated document.
 
 - `result` is `"fail"` iff any anchor is stale; otherwise `"pass"`. This mirrors the
   process exit code.
-- `fully_skipped` is `true` iff `specs_total > 0` and every spec was skipped (e.g. all
-  origins point to a different repo). When this is true, the user got *zero
-  verification* even though `result` is `"pass"`. CI dashboards should treat
-  `fully_skipped` as a yellow signal rather than a green check.
-- All counts are non-negative integers; `specs_fresh + specs_stale + specs_skipped == specs_total`.
+- `verification_state` describes **coverage**: how much of the discovered work was
+  actually verified versus skipped (e.g. origin mismatch).
+  - `"none"`: `specs_total > 0` but `specs_checked == 0` — every spec was skipped, so
+    no staleness verification ran. CI dashboards should treat this as a yellow signal:
+    `result` may still be `"pass"`.
+  - `"partial"`: some specs were checked and some skipped (`specs_checked > 0` and
+    `specs_skipped > 0`).
+  - `"full"`: nothing was skipped (`specs_skipped == 0`), including the case
+    `specs_total == 0` (no specs to skip).
+- `specs_checked` is `specs_fresh + specs_stale` — specs that were not skipped.
+- All counts are non-negative integers;
+  `specs_fresh + specs_stale + specs_skipped == specs_total`.
 
 ## `specs[*]`
 
@@ -98,6 +125,9 @@ zero anchors is `"fresh"`.
   enum values below and `message` is the human-readable form (English, stable).
 - `blame` is populated on a best-effort basis when an anchor is stale due to file
   content drift; `null` otherwise (or when git blame failed).
+  - `commit` is the full Git object id (`git log` `%H`), not an abbreviated SHA.
+  - `date` is the committer date in ISO 8601 strict form (`git --date=iso-strict`, e.g.
+    `2026-04-07T20:18:31+02:00`), suitable for sorting and comparison.
 
 ### `reason.code` values
 
@@ -116,7 +146,7 @@ schema bump.
 
 ## Stability and versioning
 
-This is `drift.check.v1`. Within the `v1` line:
+This is `drift.check.v1`. Within this identifier:
 
 - New fields **may** be added at the top level, in `summary`, in `specs[*]`, or in
   `specs[*].anchors[*]`. Consumers must ignore unknown fields.
@@ -124,7 +154,7 @@ This is `drift.check.v1`. Within the `v1` line:
   gracefully (e.g. fall back to `reason.message`).
 - Existing field names, types, and units **will not** change. Renaming
   `checked_at_ms`, repurposing `result`, or changing the unit of any timestamp is a
-  breaking change and bumps the schema to `v2`.
+  breaking change and requires a new `schema_version` string.
 
 ## Example: stale anchor with blame
 
@@ -137,9 +167,16 @@ This is `drift.check.v1`. Within the `v1` line:
   "checked_at_ms": 1733001234567,
   "summary": {
     "result": "fail",
-    "fully_skipped": false,
-    "specs_total": 1, "specs_fresh": 0, "specs_stale": 1, "specs_skipped": 0,
-    "anchors_total": 1, "anchors_fresh": 0, "anchors_stale": 1, "anchors_skipped": 0
+    "verification_state": "full",
+    "specs_total": 1,
+    "specs_checked": 1,
+    "specs_skipped": 0,
+    "specs_fresh": 0,
+    "specs_stale": 1,
+    "anchors_total": 1,
+    "anchors_fresh": 0,
+    "anchors_stale": 1,
+    "anchors_skipped": 0
   },
   "specs": [{
     "path": "docs/auth.md",
@@ -156,8 +193,8 @@ This is `drift.check.v1`. Within the `v1` line:
       "reason": { "code": "changed_after_baseline", "message": "changed after spec" },
       "blame": {
         "author": "Alice",
-        "commit": "deadbeef",
-        "date": "2026-04-07",
+        "commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        "date": "2026-04-07T14:22:00+00:00",
         "subject": "refactor: rename login handler"
       }
     }]

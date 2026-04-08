@@ -14,6 +14,37 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
 
+    const payload_module = b.createModule(.{
+        .root_source_file = b.path("src/payload/drift_check_v1.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const drift_check_schema_gen_module = b.createModule(.{
+        .root_source_file = b.path("src/payload/drift_check_schema_gen.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "payload", .module = payload_module },
+        },
+    });
+
+    const gen_check_schema_exe = b.addExecutable(.{
+        .name = "gen-drift-check-schema",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/gen_drift_check_schema.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "drift_check_schema_gen", .module = drift_check_schema_gen_module },
+            },
+        }),
+    });
+    const run_gen_schema = b.addRunArtifact(gen_check_schema_exe);
+    run_gen_schema.addArg("docs/schemas/drift.check.v1.json");
+    const gen_check_schema_step = b.step("gen-check-schema", "Regenerate docs/schemas/drift.check.v1.json from payload types");
+    gen_check_schema_step.dependOn(&run_gen_schema.step);
+
     // Root module
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -23,6 +54,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "clap", .module = clap_dep.module("clap") },
             .{ .name = "tree_sitter", .module = ts_module },
+            .{ .name = "payload", .module = payload_module },
         },
     });
     root_module.addOptions("build_options", build_options);
@@ -55,6 +87,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     helpers_module.addOptions("build_options", test_options);
+    helpers_module.addImport("payload", payload_module);
 
     const test_module = b.createModule(.{
         .root_source_file = b.path("tests.zig"),
@@ -65,6 +98,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "clap", .module = clap_dep.module("clap") },
             .{ .name = "tree_sitter", .module = ts_module },
             .{ .name = "helpers", .module = helpers_module },
+            .{ .name = "payload", .module = payload_module },
         },
     });
     linkGrammars(b, test_module);
