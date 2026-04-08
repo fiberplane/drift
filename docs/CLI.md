@@ -1,7 +1,7 @@
 ---
 drift:
   files:
-    - src/main.zig@sig:1f0ab611cebf2ea0
+    - src/main.zig@sig:3560999bb08f8512
 ---
 
 # CLI Reference
