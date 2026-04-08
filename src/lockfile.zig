@@ -58,6 +58,15 @@ pub const Lockfile = struct {
     }
 };
 
+pub const SpecBindings = struct {
+    path: []const u8,
+    bindings: std.ArrayList(*Binding),
+
+    pub fn deinit(self: *SpecBindings, allocator: std.mem.Allocator) void {
+        self.bindings.deinit(allocator);
+    }
+};
+
 pub const ParseError = error{
     InvalidBindingLine,
     InvalidMetadataField,
@@ -128,6 +137,52 @@ pub fn parseInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
         if (trimmed.len == 0 or trimmed[0] == '#') continue;
         try bindings.append(allocator, try parseLine(allocator, trimmed));
     }
+}
+
+pub fn groupBySpec(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayList(SpecBindings) {
+    var specs: std.ArrayList(SpecBindings) = .{};
+    errdefer {
+        for (specs.items) |*spec| spec.deinit(allocator);
+        specs.deinit(allocator);
+    }
+
+    for (bindings) |*binding| {
+        var found: ?*SpecBindings = null;
+        for (specs.items) |*spec| {
+            if (std.mem.eql(u8, spec.path, binding.spec_path)) {
+                found = spec;
+                break;
+            }
+        }
+
+        if (found) |spec| {
+            try spec.bindings.append(allocator, binding);
+        } else {
+            var spec = SpecBindings{
+                .path = binding.spec_path,
+                .bindings = .{},
+            };
+            errdefer spec.deinit(allocator);
+            try spec.bindings.append(allocator, binding);
+            try specs.append(allocator, spec);
+        }
+    }
+
+    std.mem.sort(SpecBindings, specs.items, {}, struct {
+        fn lessThan(_: void, a: SpecBindings, b: SpecBindings) bool {
+            return std.mem.order(u8, a.path, b.path) == .lt;
+        }
+    }.lessThan);
+
+    for (specs.items) |*spec| {
+        std.mem.sort(*Binding, spec.bindings.items, {}, struct {
+            fn lessThan(_: void, a: *Binding, b: *Binding) bool {
+                return std.mem.order(u8, a.target, b.target) == .lt;
+            }
+        }.lessThan);
+    }
+
+    return specs;
 }
 
 pub fn serialize(allocator: std.mem.Allocator, bindings: []const Binding) ![]u8 {

@@ -1,98 +1,55 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const drift_check_v1 = @import("payload");
-const frontmatter = @import("../frontmatter.zig");
-const scanner = @import("../scanner.zig");
+const lockfile = @import("../lockfile.zig");
 const symbols = @import("../symbols.zig");
 const vcs = @import("../vcs.zig");
 
-const Spec = scanner.Spec;
-
-/// Output format for `drift check` / `drift lint`.
-///
-/// Defined here (rather than in main.zig) so the lint command owns its own surface
-/// and other call sites (status.zig, future commands) can import the same enum.
-/// Replaces the previous `format_json: bool` boolean trap — adding sarif/junit/etc.
-/// later only requires extending this enum.
 pub const Format = enum { text, json };
-
-/// Result of a single `run` invocation. The command exits 1 on `.stale` and 0 on `.pass`.
-///
-/// We return this from `run` instead of calling `std.process.exit` directly so that
-/// `defer`-based cleanup (FileCache, CheckResult, GitCatFile, repo_identity) actually
-/// runs before the process dies. `std.process.exit` calls libc `exit`, which does not
-/// unwind Zig defers — previously this leaked allocations on the stale path and tripped
-/// DebugAllocator in test/CI builds.
 pub const RunStatus = enum { pass, stale };
 
-/// Caches current and historical file bytes for one lint run (path -> bytes, rev+path -> bytes).
 const FileCache = struct {
     allocator: std.mem.Allocator,
     current: std.StringHashMap([]const u8),
-    historical: std.StringHashMap([]const u8),
 
     fn init(allocator: std.mem.Allocator) FileCache {
         return .{
             .allocator = allocator,
             .current = std.StringHashMap([]const u8).init(allocator),
-            .historical = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
     fn deinit(self: *FileCache) void {
-        var c_it = self.current.iterator();
-        while (c_it.next()) |kv| {
+        var it = self.current.iterator();
+        while (it.next()) |kv| {
             self.allocator.free(kv.key_ptr.*);
             self.allocator.free(kv.value_ptr.*);
         }
         self.current.deinit();
-        var h_it = self.historical.iterator();
-        while (h_it.next()) |kv| {
-            self.allocator.free(kv.key_ptr.*);
-            self.allocator.free(kv.value_ptr.*);
-        }
-        self.historical.deinit();
     }
 
-    fn getCurrent(self: *FileCache, path: []const u8) ?[]const u8 {
-        if (self.current.get(path)) |c| return c;
-        const content = std.fs.cwd().readFileAlloc(self.allocator, path, 1024 * 1024) catch return null;
-        const key = self.allocator.dupe(u8, path) catch {
-            self.allocator.free(content);
-            return null;
+    fn getCurrent(self: *FileCache, absolute_path: []const u8) !?[]const u8 {
+        if (self.current.get(absolute_path)) |content| return content;
+
+        const file = std.fs.openFileAbsolute(absolute_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
         };
-        self.current.put(key, content) catch {
-            self.allocator.free(key);
-            self.allocator.free(content);
-            return null;
-        };
-        return content;
-    }
+        defer file.close();
 
-    fn getHistorical(self: *FileCache, cat_file: *vcs.GitCatFile, revision: []const u8, file_path: []const u8) !?[]const u8 {
-        const key_str = try std.fmt.allocPrint(self.allocator, "{s}\x1f{s}", .{ revision, file_path });
-        defer self.allocator.free(key_str);
-
-        if (self.historical.get(key_str)) |c| return c;
-
-        const content_opt = try cat_file.getContent(self.allocator, revision, file_path);
-        if (content_opt == null) return null;
-        const content = content_opt.?;
-
-        const key_owned = try self.allocator.dupe(u8, key_str);
-        errdefer self.allocator.free(key_owned);
+        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024);
         errdefer self.allocator.free(content);
-        try self.historical.put(key_owned, content);
+
+        const key = try self.allocator.dupe(u8, absolute_path);
+        errdefer self.allocator.free(key);
+
+        try self.current.put(key, content);
         return content;
     }
 };
 
-// --- Result model (shared by text and JSON output) ---
-
 const AnchorResult = enum { fresh, stale, skip };
 
-/// Why an anchor is stale or skipped. The wire format emits `@tagName(code)` so the
-/// JSON consumer never sees a free-form English string for the code itself.
 const ReasonCode = enum {
     none,
     changed_after_baseline,
@@ -104,10 +61,6 @@ const ReasonCode = enum {
     origin_mismatch,
 };
 
-/// Stable, human-readable message for a reason code. This is the *only* mapping from
-/// code → string in the codebase: the text renderer and the `reason.message` JSON field
-/// both call this. Tests assert these exact strings, so changing one is a wire-format
-/// change and should bump `drift.check.v1`, update `docs/schemas/`, and `src/payload/drift_check_v1.zig`.
 fn reasonMessage(code: ReasonCode) []const u8 {
     return switch (code) {
         .none => "",
@@ -129,7 +82,6 @@ fn anchorResultStr(r: AnchorResult) []const u8 {
     };
 }
 
-/// One JSON anchor row: wire payload plus owned blame storage when `wire.blame` is non-null.
 const JsonAnchorRow = struct {
     blame_storage: ?vcs.BlameInfo,
     wire: drift_check_v1.Anchor,
@@ -142,7 +94,7 @@ const JsonAnchorRow = struct {
 const SpecCheckResult = struct {
     path: []const u8,
     origin: ?[]const u8,
-    result: AnchorResult, // worst of all anchors: stale > skip > fresh
+    result: AnchorResult,
     anchors: std.ArrayList(JsonAnchorRow),
 
     fn deinit(self: *SpecCheckResult, allocator: std.mem.Allocator) void {
@@ -153,8 +105,6 @@ const SpecCheckResult = struct {
 
 const CheckResult = struct {
     repo: ?[]const u8,
-    /// Unix timestamp in milliseconds. Wire field name is `checked_at_ms` so the unit
-    /// is unambiguous to JSON consumers (a bare `checked_at` integer could be s/ms/us/ns).
     checked_at_ms: i64,
     specs: std.ArrayList(SpecCheckResult),
     summary_result: AnchorResult,
@@ -172,12 +122,10 @@ const CheckResult = struct {
         self.specs.deinit(allocator);
     }
 
-    /// `specs_fresh + specs_stale` — specs that were actually verified (not skipped).
     fn specsChecked(self: *const CheckResult) u32 {
         return self.specs_fresh + self.specs_stale;
     }
 
-    /// Coverage of verification across discovered specs. See `docs/check-json-schema.md`.
     fn verificationState(self: *const CheckResult) []const u8 {
         const checked = self.specsChecked();
         if (self.specs_total > 0 and checked == 0) return "none";
@@ -186,77 +134,47 @@ const CheckResult = struct {
     }
 };
 
-/// Human-readable output streams one spec at a time; `summary_stale` drives exit status.
 const TextSinkState = struct {
     writer: *std.io.Writer,
     summary_stale: bool = false,
 };
 
-/// Where anchor rows go: text prints immediately (bounded memory); JSON buffers `CheckResult`.
 const LintSink = union(enum) {
     text: *TextSinkState,
     json: *CheckResult,
 };
 
-/// Outcome of checking a single anchor. Returned by `checkAnchor` and merged into the
-/// model in `run`. Replaces the old `AnchorStatus` struct that carried English label
-/// strings (`"ok"`, `"STALE"`) which `run` then re-parsed via `std.mem.eql` — fragile,
-/// and a future label tweak would silently flip JSON results.
 const AnchorOutcome = struct {
     result: AnchorResult,
     reason_code: ReasonCode,
     blame: ?vcs.BlameInfo = null,
 };
 
-const ParsedAnchor = struct {
+const ParsedTarget = struct {
     identity: []const u8,
     file_path: []const u8,
     symbol_name: ?[]const u8,
-    /// Raw provenance suffix (everything after the first `@`), or null when no `@` is present.
-    provenance: ?[]const u8,
     provenance_kind: ?[]const u8,
     provenance_value: ?[]const u8,
 };
 
-/// Single source of truth for splitting an anchor string into its parts. Both
-/// `checkAnchor` (for staleness logic) and `run` (for building the JSON model) call this,
-/// so the parsing rules can never drift between the two paths.
-fn parseAnchor(anchor: []const u8) ParsedAnchor {
-    const identity = frontmatter.anchorFileIdentity(anchor);
-    const provenance: ?[]const u8 = if (identity.len < anchor.len)
-        anchor[identity.len + 1 ..] // skip the `@` separator that anchorFileIdentity stopped at
-    else
-        null;
-
-    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-    const file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
-
-    var provenance_kind: ?[]const u8 = null;
-    var provenance_value: ?[]const u8 = null;
-    if (provenance) |prov| {
-        if (std.mem.startsWith(u8, prov, "sig:")) {
-            provenance_kind = "sig";
-            provenance_value = prov["sig:".len..];
-        } else {
-            provenance_kind = "vcs";
-            provenance_value = prov;
-        }
-    }
+fn parseTarget(target: []const u8, sig: ?[]const u8) ParsedTarget {
+    const hash_pos = std.mem.indexOfScalar(u8, target, '#');
+    const file_path = if (hash_pos) |pos| target[0..pos] else target;
+    const symbol_name = if (hash_pos) |pos| target[pos + 1 ..] else null;
 
     return .{
-        .identity = identity,
+        .identity = target,
         .file_path = file_path,
         .symbol_name = symbol_name,
-        .provenance = provenance,
-        .provenance_kind = provenance_kind,
-        .provenance_value = provenance_value,
+        .provenance_kind = if (sig != null) "sig" else null,
+        .provenance_value = sig,
     };
 }
 
-fn driftProvenance(parsed: ParsedAnchor) ?drift_check_v1.Provenance {
-    if (parsed.provenance_kind) |pk| {
-        return .{ .kind = pk, .value = parsed.provenance_value.? };
+fn driftProvenance(parsed: ParsedTarget) ?drift_check_v1.Provenance {
+    if (parsed.provenance_kind) |kind| {
+        return .{ .kind = kind, .value = parsed.provenance_value.? };
     }
     return null;
 }
@@ -266,13 +184,13 @@ fn driftReason(code: ReasonCode) ?drift_check_v1.Reason {
     return .{ .code = @tagName(code), .message = reasonMessage(code) };
 }
 
-fn jsonAnchorFromOutcome(anchor: []const u8, parsed: ParsedAnchor, outcome: AnchorOutcome) JsonAnchorRow {
+fn jsonAnchorFromOutcome(target: []const u8, parsed: ParsedTarget, outcome: AnchorOutcome) JsonAnchorRow {
     const blame_storage = outcome.blame;
     return .{
         .blame_storage = blame_storage,
         .wire = .{
             .identity = parsed.identity,
-            .raw = anchor,
+            .raw = target,
             .kind = if (parsed.symbol_name != null) "symbol" else "file",
             .path = parsed.file_path,
             .symbol = parsed.symbol_name,
@@ -289,50 +207,30 @@ fn jsonAnchorFromOutcome(anchor: []const u8, parsed: ParsedAnchor, outcome: Anch
     };
 }
 
-fn jsonAnchorOriginMismatch(anchor: []const u8, parsed: ParsedAnchor) JsonAnchorRow {
-    return .{
-        .blame_storage = null,
-        .wire = .{
-            .identity = parsed.identity,
-            .raw = anchor,
-            .kind = if (parsed.symbol_name != null) "symbol" else "file",
-            .path = parsed.file_path,
-            .symbol = parsed.symbol_name,
-            .provenance = driftProvenance(parsed),
-            .result = "skip",
-            .reason = driftReason(.origin_mismatch),
-            .blame = null,
-        },
-    };
-}
-
 pub fn run(
     allocator: std.mem.Allocator,
     stdout_w: *std.io.Writer,
     stderr_w: *std.io.Writer,
     format: Format,
 ) !RunStatus {
-    var specs: std.ArrayList(Spec) = .{};
-    defer {
-        for (specs.items) |*s| s.deinit(allocator);
-        specs.deinit(allocator);
-    }
-
-    try scanner.findAndSortSpecs(allocator, &specs);
-
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
 
+    var lf = try lockfile.discover(allocator, cwd_path);
+    defer lf.deinit(allocator);
+
+    var spec_groups = try lockfile.groupBySpec(allocator, lf.bindings.items);
+    defer {
+        for (spec_groups.items) |*spec| spec.deinit(allocator);
+        spec_groups.deinit(allocator);
+    }
+
     const detected_vcs = vcs.detectVcs();
+    const repo_identity = vcs.getRepoIdentity(allocator, cwd_path);
+    defer if (repo_identity) |ri| allocator.free(ri);
 
     var file_cache = FileCache.init(allocator);
     defer file_cache.deinit();
-
-    var cat_file = try vcs.GitCatFile.init(allocator, cwd_path);
-    defer cat_file.deinit();
-
-    const repo_identity = vcs.getRepoIdentity(allocator, cwd_path);
-    defer if (repo_identity) |ri| allocator.free(ri);
 
     var text_sink_state = TextSinkState{ .writer = stdout_w };
 
@@ -361,117 +259,72 @@ pub fn run(
         .json => .{ .json = &json_result },
     };
 
-    for (specs.items) |spec| {
+    for (spec_groups.items) |spec| {
         switch (sink) {
             .text => |ts| ts.writer.print("{s}\n", .{spec.path}) catch {},
             .json => {},
         }
 
-        if (spec.anchors.items.len == 0) {
-            switch (sink) {
-                .text => |ts| ts.writer.print("  ok\n", .{}) catch {},
-                .json => |r| {
-                    try r.specs.append(allocator, .{
-                        .path = spec.path,
-                        .origin = spec.origin,
-                        .result = .fresh,
-                        .anchors = .{},
-                    });
-                    r.specs_total += 1;
-                    r.specs_fresh += 1;
-                },
-            }
-            continue;
-        }
-
-        if (spec.origin) |origin| {
-            const is_local = if (repo_identity) |ri| std.mem.eql(u8, origin, ri) else false;
-            if (!is_local) {
-                switch (sink) {
-                    .text => {
-                        for (spec.anchors.items) |anchor| {
-                            text_sink_state.writer.print("  SKIP   {s} (origin: {s})\n", .{ anchor, origin }) catch {};
-                        }
-                    },
-                    .json => |r| {
-                        var spec_result = SpecCheckResult{
-                            .path = spec.path,
-                            .origin = spec.origin,
-                            .result = .fresh,
-                            .anchors = .{},
-                        };
-                        for (spec.anchors.items) |anchor| {
-                            const parsed = parseAnchor(anchor);
-                            try spec_result.anchors.append(allocator, jsonAnchorOriginMismatch(anchor, parsed));
-                            r.anchors_total += 1;
-                            r.anchors_skipped += 1;
-                        }
-                        spec_result.result = .skip;
-                        try r.specs.append(allocator, spec_result);
-                        r.specs_total += 1;
-                        r.specs_skipped += 1;
-                    },
-                }
-                continue;
-            }
-        }
-
-        const spec_commit = vcs.getLastCommit(allocator, cwd_path, spec.path, detected_vcs) catch |err| {
-            stderr_w.print("vcs error for {s}: {s}\n", .{ spec.path, @errorName(err) }) catch {};
-            return error.LintCheckFailed;
+        var spec_result = SpecCheckResult{
+            .path = spec.path,
+            .origin = null,
+            .result = .fresh,
+            .anchors = .{},
         };
-        defer if (spec_commit) |c| allocator.free(c);
+        errdefer spec_result.deinit(allocator);
+
+        var fresh_count: usize = 0;
+        var stale_count: usize = 0;
+        var skip_count: usize = 0;
+
+        for (spec.bindings.items) |binding| {
+            const origin = binding.fieldValue("origin");
+            const sig = binding.fieldValue("sig");
+            const parsed = parseTarget(binding.target, sig);
+
+            const outcome = blk: {
+                if (origin) |o| {
+                    const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
+                    if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
+                }
+                break :blk checkBinding(allocator, lf.root_path, binding, &file_cache, detected_vcs) catch |err| {
+                    stderr_w.print("error checking {s}: {s}\n", .{ binding.target, @errorName(err) }) catch {};
+                    return error.LintCheckFailed;
+                };
+            };
+
+            switch (sink) {
+                .text => |ts| textEmitAnchor(allocator, ts.writer, origin, binding.target, outcome),
+                .json => try spec_result.anchors.append(allocator, jsonAnchorFromOutcome(binding.target, parsed, outcome)),
+            }
+
+            switch (outcome.result) {
+                .fresh => fresh_count += 1,
+                .stale => stale_count += 1,
+                .skip => skip_count += 1,
+            }
+        }
+
+        spec_result.result = if (stale_count > 0)
+            .stale
+        else if (skip_count > 0 and fresh_count == 0)
+            .skip
+        else
+            .fresh;
 
         switch (sink) {
-            .text => {
-                var any_problem = false;
-                for (spec.anchors.items) |anchor| {
-                    const outcome = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
-                        stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
-                        return error.LintCheckFailed;
-                    };
-                    textEmitAnchor(allocator, text_sink_state.writer, spec.origin, anchor, outcome);
-                    switch (outcome.result) {
-                        .fresh => {},
-                        .stale => {
-                            any_problem = true;
-                            text_sink_state.summary_stale = true;
-                        },
-                        .skip => any_problem = true,
-                    }
+            .text => |ts| {
+                if (stale_count == 0 and skip_count == 0) {
+                    ts.writer.print("  ok\n", .{}) catch {};
                 }
-                if (!any_problem) {
-                    text_sink_state.writer.print("  ok\n", .{}) catch {};
-                }
+                if (stale_count > 0) ts.summary_stale = true;
             },
             .json => |r| {
-                var spec_result = SpecCheckResult{
-                    .path = spec.path,
-                    .origin = spec.origin,
-                    .result = .fresh,
-                    .anchors = .{},
-                };
-                for (spec.anchors.items) |anchor| {
-                    const outcome = checkAnchor(allocator, cwd_path, anchor, spec_commit, detected_vcs, &cat_file, &file_cache) catch |err| {
-                        stderr_w.print("error checking {s}: {s}\n", .{ anchor, @errorName(err) }) catch {};
-                        return error.LintCheckFailed;
-                    };
-
-                    const parsed = parseAnchor(anchor);
-                    try spec_result.anchors.append(allocator, jsonAnchorFromOutcome(anchor, parsed, outcome));
-
-                    r.anchors_total += 1;
-                    switch (outcome.result) {
-                        .fresh => r.anchors_fresh += 1,
-                        .stale => {
-                            r.anchors_stale += 1;
-                            spec_result.result = .stale;
-                        },
-                        .skip => r.anchors_skipped += 1,
-                    }
-                }
-
                 r.specs_total += 1;
+                r.anchors_total += @intCast(spec.bindings.items.len);
+                r.anchors_fresh += @intCast(fresh_count);
+                r.anchors_stale += @intCast(stale_count);
+                r.anchors_skipped += @intCast(skip_count);
                 switch (spec_result.result) {
                     .fresh => r.specs_fresh += 1,
                     .stale => {
@@ -485,16 +338,10 @@ pub fn run(
         }
     }
 
-    switch (sink) {
-        .text => |ts| {
-            if (specs.items.len == 0) {
-                ts.writer.print("ok\n", .{}) catch {};
-            }
-        },
-        .json => {},
+    if (format == .text and spec_groups.items.len == 0) {
+        stdout_w.print("ok\n", .{}) catch {};
     }
 
-    // JSON write errors propagate so a truncated/corrupt payload becomes a non-zero exit.
     if (format == .json) {
         try writeResultsJson(allocator, stdout_w, &json_result);
     }
@@ -505,180 +352,53 @@ pub fn run(
     };
 }
 
-fn checkAnchor(
+fn checkBinding(
     allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    anchor: []const u8,
-    spec_commit: ?[]const u8,
-    detected_vcs: vcs.VcsKind,
-    cat_file: *vcs.GitCatFile,
+    root_path: []const u8,
+    binding: *const lockfile.Binding,
     file_cache: *FileCache,
+    detected_vcs: vcs.VcsKind,
 ) !AnchorOutcome {
-    const parsed = parseAnchor(anchor);
-    const file_path = parsed.file_path;
-    const symbol_name = parsed.symbol_name;
-    const provenance = parsed.provenance;
+    const sig_hex = binding.fieldValue("sig") orelse return .{ .result = .stale, .reason_code = .baseline_unavailable };
 
-    const file_exists = blk: {
-        std.fs.cwd().access(file_path, .{}) catch break :blk false;
-        break :blk true;
-    };
+    const parsed = parseTarget(binding.target, sig_hex);
+    const absolute_path = try std.fs.path.join(allocator, &.{ root_path, parsed.file_path });
+    defer allocator.free(absolute_path);
 
-    if (!file_exists) {
+    const current_content = file_cache.getCurrent(absolute_path) catch {
+        return .{ .result = .stale, .reason_code = .file_not_readable };
+    } orelse {
         return .{ .result = .stale, .reason_code = .file_not_found };
-    }
-
-    const needs_current_content = symbol_name != null or provenance != null or spec_commit != null;
-    const file_content: ?[]const u8 = if (needs_current_content) blk: {
-        break :blk file_cache.getCurrent(file_path) orelse {
-            return .{ .result = .stale, .reason_code = .file_not_readable };
-        };
-    } else null;
-
-    if (symbol_name) |sym| {
-        const content = file_content.?;
-
-        const ext = std.fs.path.extension(file_path);
-        if (symbols.languageForExtension(ext)) |lang_query| {
-            if (!symbols.resolveSymbolWithTreeSitter(content, lang_query, sym)) {
-                return .{ .result = .stale, .reason_code = .symbol_not_found };
-            }
-        } else {
-            if (std.mem.indexOf(u8, content, sym) == null) {
-                return .{ .result = .stale, .reason_code = .symbol_not_found };
-            }
-        }
-    }
-
-    if (provenance) |prov| {
-        if (std.mem.startsWith(u8, prov, "sig:")) {
-            return checkAnchorBySig(allocator, cwd_path, file_path, symbol_name, prov["sig:".len..], spec_commit, detected_vcs, file_content.?);
-        }
-        return checkAnchorByContent(allocator, cwd_path, file_path, symbol_name, prov, spec_commit, detected_vcs, file_content.?, cat_file, file_cache);
-    }
-    if (spec_commit) |commit| {
-        return checkAnchorByContent(allocator, cwd_path, file_path, symbol_name, commit, spec_commit, detected_vcs, file_content.?, cat_file, file_cache);
-    }
-
-    return .{ .result = .fresh, .reason_code = .none };
-}
-
-fn checkAnchorByContent(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    file_path: []const u8,
-    symbol_name: ?[]const u8,
-    provenance: []const u8,
-    spec_commit: ?[]const u8,
-    detected_vcs: vcs.VcsKind,
-    current_content: []const u8,
-    cat_file: *vcs.GitCatFile,
-    file_cache: *FileCache,
-) !AnchorOutcome {
-    const historical_content = blk: {
-        const from_prov = file_cache.getHistorical(cat_file, provenance, file_path) catch break :blk null;
-        if (from_prov) |content| break :blk content;
-        if (spec_commit) |sc| {
-            const from_spec = file_cache.getHistorical(cat_file, sc, file_path) catch break :blk null;
-            if (from_spec) |content| break :blk content;
-        }
-        break :blk null;
     };
 
-    if (historical_content == null) {
-        return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
-    }
-
-    if (symbol_name) |sym| {
-        const ext = std.fs.path.extension(file_path);
-        const lang_query = symbols.languageForExtension(ext) orelse {
-            if (!std.mem.eql(u8, historical_content.?, current_content)) {
-                return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
-            }
-            return .{ .result = .fresh, .reason_code = .none };
-        };
-
-        const current_fingerprint = symbols.fingerprintSymbolSyntax(current_content, lang_query, sym);
-        if (current_fingerprint == null) {
-            return .{ .result = .stale, .reason_code = .symbol_not_found };
-        }
-
-        const historical_fingerprint = symbols.fingerprintSymbolSyntax(historical_content.?, lang_query, sym);
-        if (historical_fingerprint == null) {
-            return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
-        }
-
-        if (current_fingerprint.? != historical_fingerprint.?) {
-            return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
-        }
-    } else {
-        const ext = std.fs.path.extension(file_path);
+    if (parsed.symbol_name) |sym| {
+        const ext = std.fs.path.extension(parsed.file_path);
         if (symbols.languageForExtension(ext)) |lang_query| {
-            const current_fingerprint = symbols.fingerprintFileSyntax(current_content, lang_query);
-            const historical_fingerprint = symbols.fingerprintFileSyntax(historical_content.?, lang_query);
-
-            if (current_fingerprint == null or historical_fingerprint == null) {
-                if (!std.mem.eql(u8, historical_content.?, current_content)) {
-                    return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
-                }
-            } else if (current_fingerprint.? != historical_fingerprint.?) {
-                return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
-            }
-        } else {
-            if (!std.mem.eql(u8, historical_content.?, current_content)) {
-                return staleChangedAfterSpec(allocator, cwd_path, file_path, provenance, detected_vcs);
+            if (!symbols.resolveSymbolWithTreeSitter(current_content, lang_query, sym)) {
+                return .{ .result = .stale, .reason_code = .symbol_not_found };
             }
         }
     }
 
-    return .{ .result = .fresh, .reason_code = .none };
-}
-
-fn checkAnchorBySig(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    file_path: []const u8,
-    symbol_name: ?[]const u8,
-    sig_hex: []const u8,
-    spec_commit: ?[]const u8,
-    detected_vcs: vcs.VcsKind,
-    current_content: []const u8,
-) !AnchorOutcome {
-    const fingerprint = symbols.computeFingerprint(current_content, file_path, symbol_name) orelse {
+    const fingerprint = symbols.computeFingerprint(current_content, parsed.file_path, parsed.symbol_name) orelse {
         return .{ .result = .stale, .reason_code = .fingerprint_unavailable };
     };
 
     var hex_buf: [16]u8 = undefined;
-    const current_hex = std.fmt.bufPrint(&hex_buf, "{x:0>16}", .{fingerprint}) catch unreachable;
-
+    const current_hex = try std.fmt.bufPrint(&hex_buf, "{x:0>16}", .{fingerprint});
     if (std.mem.eql(u8, current_hex, sig_hex)) {
         return .{ .result = .fresh, .reason_code = .none };
     }
 
-    const blame_rev = spec_commit orelse sig_hex;
-    const blame = vcs.getBlameInfo(allocator, cwd_path, file_path, blame_rev, detected_vcs) catch null;
+    const blame = vcs.getLatestBlameInfo(allocator, root_path, parsed.file_path, detected_vcs) catch null;
     return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
 }
 
-fn staleChangedAfterSpec(
-    allocator: std.mem.Allocator,
-    cwd_path: []const u8,
-    file_path: []const u8,
-    provenance: []const u8,
-    detected_vcs: vcs.VcsKind,
-) !AnchorOutcome {
-    const blame = vcs.getBlameInfo(allocator, cwd_path, file_path, provenance, detected_vcs) catch null;
-    return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
-}
-
-// --- Renderers ---
-
-/// Prints one anchor for text mode and frees `outcome.blame` when present (bounded memory).
 fn textEmitAnchor(
     allocator: std.mem.Allocator,
     stdout_w: *std.io.Writer,
-    spec_origin: ?[]const u8,
-    anchor: []const u8,
+    origin: ?[]const u8,
+    target: []const u8,
     outcome: AnchorOutcome,
 ) void {
     const blame_owned = outcome.blame;
@@ -688,9 +408,9 @@ fn textEmitAnchor(
         .stale => {
             const msg = reasonMessage(outcome.reason_code);
             if (msg.len > 0) {
-                stdout_w.print("  STALE   {s} ({s})\n", .{ anchor, msg }) catch {};
+                stdout_w.print("  STALE   {s} ({s})\n", .{ target, msg }) catch {};
             } else {
-                stdout_w.print("  STALE   {s}\n", .{anchor}) catch {};
+                stdout_w.print("  STALE   {s}\n", .{target}) catch {};
             }
             if (blame_owned) |blame| {
                 stdout_w.print("          changed by {s} in {s} ({s})\n", .{ blame.author, blame.commit_hash, blame.date }) catch {};
@@ -698,23 +418,16 @@ fn textEmitAnchor(
             }
         },
         .skip => {
-            if (spec_origin) |origin| {
-                stdout_w.print("  SKIP   {s} (origin: {s})\n", .{ anchor, origin }) catch {};
+            if (origin) |o| {
+                stdout_w.print("  SKIP   {s} (origin: {s})\n", .{ target, o }) catch {};
             } else {
-                stdout_w.print("  SKIP   {s}\n", .{anchor}) catch {};
+                stdout_w.print("  SKIP   {s}\n", .{target}) catch {};
             }
         },
         .fresh => {},
     }
 }
 
-/// Emit the `drift.check.v1` document from `src/payload/drift_check_v1.zig`. See
-/// `docs/check-json-schema.md` and `docs/schemas/drift.check.v1.json`.
-///
-/// Errors propagate (broken pipe, OOM in encoder, full disk) so a truncated payload
-/// becomes a non-zero exit. Do *not* swallow these — a JSON consumer that gets a
-/// half-written document has no way to distinguish "drift exited cleanly with this
-/// content" from "drift died mid-write."
 fn writeResultsJson(allocator: std.mem.Allocator, w: *std.io.Writer, result: *const CheckResult) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
