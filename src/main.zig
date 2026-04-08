@@ -6,6 +6,7 @@ const lint = @import("commands/lint.zig");
 const status = @import("commands/status.zig");
 const link = @import("commands/link.zig");
 const unlink = @import("commands/unlink.zig");
+const refs = @import("commands/refs.zig");
 
 const version = build_options.version;
 
@@ -15,6 +16,7 @@ const SubCommand = enum {
     status,
     link,
     unlink,
+    refs,
     help,
 };
 
@@ -190,6 +192,19 @@ pub fn main() !void {
                 exitWithCommandError(&stderr_w.interface, "unlink", err);
             };
         },
+        .refs => {
+            const target = iter.next() orelse {
+                stderr_w.interface.print("usage: drift refs <path>\n", .{}) catch {};
+                return error.MissingArguments;
+            };
+            if (iter.next()) |_| {
+                stderr_w.interface.print("usage: drift refs <path>\n", .{}) catch {};
+                return error.InvalidArgument;
+            }
+            refs.run(allocator, &stdout_w.interface, &stderr_w.interface, target) catch |err| {
+                exitWithCommandError(&stderr_w.interface, "refs", err);
+            };
+        },
         .help => printUsage(&stdout_w.interface),
     }
 }
@@ -205,6 +220,7 @@ fn printUsage(w: *std.io.Writer) void {
         \\  status    Show all specs and their anchors  [--format text|json]
         \\  link      Add anchors to a spec
         \\  unlink    Remove anchors from a spec
+        \\  refs      Show which specs reference a target
         \\
         \\Options:
         \\  -h, --help     Show this help message

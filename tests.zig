@@ -8,4 +8,5 @@ test {
     _ = @import("test/integration/status_test.zig");
     _ = @import("test/integration/link_test.zig");
     _ = @import("test/integration/unlink_test.zig");
+    _ = @import("test/integration/refs_test.zig");
 }
