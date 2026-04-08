@@ -1,10 +1,3 @@
----
-drift:
-  files:
-    - .github/workflows/release.yml@sig:9df2a52053527e17
-    - .github/workflows/ci.yml@sig:e8440b1d7ee3e4ba
-    - cliff.toml@sig:d2a8e301fe4b788e
----
 
 # Releasing
 

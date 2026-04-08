@@ -212,9 +212,6 @@ pub fn run(
         doc_groups.deinit(ctx.run_arena);
     }
 
-    var parser_cache = symbols.ParserCache.init(ctx.run_arena);
-    defer parser_cache.deinit();
-
     const detected_vcs = vcs.detectVcs();
     const repo_identity = vcs.getRepoIdentity(ctx.run_arena, ctx.scratch(), cwd_path);
 
@@ -287,7 +284,7 @@ pub fn run(
                     const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
                     if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
                 }
-                break :blk checkBinding(ctx, format, &parser_cache, lf.root_path, binding, &file_cache, detected_vcs) catch |err| {
+                break :blk checkBinding(ctx, format, lf.root_path, binding, &file_cache, detected_vcs) catch |err| {
                     stderr_w.print("error checking {s}: {s}\n", .{ binding.target, @errorName(err) }) catch {};
                     return error.LintCheckFailed;
                 };
@@ -387,7 +384,6 @@ fn normalizeChangedPrefix(
 fn checkBinding(
     ctx: CommandContext,
     format: Format,
-    parser_cache: *symbols.ParserCache,
     root_path: []const u8,
     binding: *const lockfile.Binding,
     file_cache: *FileCache,
@@ -407,13 +403,13 @@ fn checkBinding(
     if (parsed.symbol_name) |sym| {
         const ext = std.fs.path.extension(parsed.file_path);
         if (symbols.languageForExtension(ext)) |lang_query| {
-            if (!symbols.resolveSymbolWithTreeSitterCached(parser_cache, current_content, lang_query, sym)) {
+            if (!symbols.resolveSymbolWithTreeSitter(current_content, lang_query, sym)) {
                 return .{ .result = .stale, .reason_code = .symbol_not_found };
             }
         }
     }
 
-    const fingerprint = symbols.computeFingerprintCached(parser_cache, current_content, parsed.file_path, parsed.symbol_name) orelse {
+    const fingerprint = symbols.computeFingerprint(current_content, parsed.file_path, parsed.symbol_name) orelse {
         return .{ .result = .stale, .reason_code = .fingerprint_unavailable };
     };
 

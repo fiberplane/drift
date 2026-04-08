@@ -1,13 +1,6 @@
 ---
 name: drift
 description: Drift doc-to-code anchor conventions. Use when editing code that is bound by drift docs, updating docs, working with drift.lock, or when drift check reports stale anchors.
-drift:
-  origin: github:fiberplane/drift
-  files:
-    - src/main.zig@sig:3560999bb08f8512
-    - src/frontmatter.zig@sig:ef9880e4f1a96c16
-    - src/scanner.zig@sig:9ccfb8091a6c8ef2
-    - src/vcs.zig@sig:b9481e9cf295501a
 ---
 
 # Drift
