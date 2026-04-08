@@ -13,16 +13,17 @@
 
 ## Architecture
 
-drift binds markdown specs to code and lints for staleness. No daemon, no index, no cache. Every `drift lint` run is stateless: read specs, parse referenced files on demand, hash symbols, query VCS, report.
+drift binds markdown docs to code and lints for staleness. No daemon, no index, no cache. Every `drift lint` run is stateless: read docs, parse referenced files on demand, hash symbols, query VCS, report.
 
 Reference: docs/DESIGN.md, docs/DECISIONS.md, docs/CLI.md, docs/RELEASING.md
 
 ## Zig Conventions
 
-- Arena allocator per command lifecycle
+- Two arenas per command: `run_arena` for command-lifetime data, `scratch_arena` for per-item temporaries (reset between iterations). GPA only in `main()`. See docs/DECISIONS.md §12.
+- Stack buffers for fixed-width formatting (fingerprint hex, small `bufPrint` targets)
+- Only OS/C resources get explicit `deinit()` — arena-backed data structs do not own memory
 - DebugAllocator in Debug builds for leak detection
 - File-is-the-struct pattern (Ghostty convention)
-- Every `try alloc` except the last needs `errdefer free`
 - No `anyerror` in public APIs — explicit error sets
 - `zig fmt` enforced
 - All tests use `std.testing.allocator`

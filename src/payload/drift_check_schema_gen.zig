@@ -42,17 +42,17 @@ fn buildDocument(a: std.mem.Allocator) !json.Value {
 
     var specs_map = json.ObjectMap.init(a);
     try specs_map.put("type", .{ .string = "array" });
-    try specs_map.put("description", .{ .string = "Discovered specs in scanner order." });
+    try specs_map.put("description", .{ .string = "Discovered docs in scanner order." });
     var item_ref = json.ObjectMap.init(a);
-    try item_ref.put("$ref", .{ .string = "#/$defs/spec" });
+    try item_ref.put("$ref", .{ .string = "#/$defs/doc" });
     try specs_map.put("items", .{ .object = item_ref });
-    try props.put("specs", .{ .object = specs_map });
+    try props.put("docs", .{ .object = specs_map });
 
     try root.put("properties", .{ .object = props });
 
     var defs = json.ObjectMap.init(a);
     try defs.put("summary", .{ .object = try defSummary(a) });
-    try defs.put("spec", .{ .object = try defSpec(a) });
+    try defs.put("doc", .{ .object = try defDoc(a) });
     try defs.put("anchor", .{ .object = try defAnchor(a) });
     try defs.put("provenance", .{ .object = try defProvenance(a) });
     try defs.put("reason", .{ .object = try defReason(a) });
@@ -142,19 +142,19 @@ fn defSummary(a: std.mem.Allocator) !json.ObjectMap {
     try vs.put("type", .{ .string = "string" });
     try vs.put("enum", try stringArray(a, &.{ "none", "partial", "full" }));
     try vs.put("description", .{ .string = 
-        \\Coverage of verification: none = all specs skipped; partial = mix; full = nothing skipped (including zero specs).
+        \\Coverage of verification: none = all docs skipped; partial = mix; full = nothing skipped (including zero docs).
     });
     try props.put("verification_state", .{ .object = vs });
 
-    try props.put("specs_total", .{ .object = try uintSchema(a) });
+    try props.put("docs_total", .{ .object = try uintSchema(a) });
     var sc = json.ObjectMap.init(a);
     try sc.put("type", .{ .string = "integer" });
     try sc.put("minimum", .{ .integer = 0 });
-    try sc.put("description", .{ .string = "specs_fresh + specs_stale (specs not skipped)." });
-    try props.put("specs_checked", .{ .object = sc });
-    try props.put("specs_skipped", .{ .object = try uintSchema(a) });
-    try props.put("specs_fresh", .{ .object = try uintSchema(a) });
-    try props.put("specs_stale", .{ .object = try uintSchema(a) });
+    try sc.put("description", .{ .string = "docs_fresh + docs_stale (docs not skipped)." });
+    try props.put("docs_checked", .{ .object = sc });
+    try props.put("docs_skipped", .{ .object = try uintSchema(a) });
+    try props.put("docs_fresh", .{ .object = try uintSchema(a) });
+    try props.put("docs_stale", .{ .object = try uintSchema(a) });
     try props.put("anchors_total", .{ .object = try uintSchema(a) });
     try props.put("anchors_fresh", .{ .object = try uintSchema(a) });
     try props.put("anchors_stale", .{ .object = try uintSchema(a) });
@@ -164,15 +164,15 @@ fn defSummary(a: std.mem.Allocator) !json.ObjectMap {
     return o;
 }
 
-fn defSpec(a: std.mem.Allocator) !json.ObjectMap {
+fn defDoc(a: std.mem.Allocator) !json.ObjectMap {
     var o = json.ObjectMap.init(a);
     try o.put("type", .{ .string = "object" });
     try o.put("additionalProperties", .{ .bool = true });
-    try o.put("required", try requiredNamesArray(a, P.Spec));
+    try o.put("required", try requiredNamesArray(a, P.Doc));
     var props = json.ObjectMap.init(a);
     try props.put("path", .{ .object = try stringType(a) });
     try props.put("origin", try nullableStringDesc(a,
-        \\Spec drift.origin frontmatter when present.
+        \\Doc drift.origin frontmatter when present.
     ));
     var res = json.ObjectMap.init(a);
     try res.put("type", .{ .string = "string" });
@@ -209,7 +209,7 @@ fn defAnchor(a: std.mem.Allocator) !json.ObjectMap {
 
     var raw = json.ObjectMap.init(a);
     try raw.put("type", .{ .string = "string" });
-    try raw.put("description", .{ .string = "Full anchor string from the spec." });
+    try raw.put("description", .{ .string = "Full anchor string from the doc." });
     try props.put("raw", .{ .object = raw });
 
     var kind = json.ObjectMap.init(a);

@@ -1,72 +1,69 @@
 const std = @import("std");
-const scanner = @import("../scanner.zig");
+const CommandContext = @import("../context.zig").CommandContext;
 const lint = @import("lint.zig");
+const lockfile = @import("../lockfile.zig");
 
-const Spec = scanner.Spec;
 pub const Format = lint.Format;
 
-pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
-    var specs: std.ArrayList(Spec) = .{};
-    defer {
-        for (specs.items) |*s| s.deinit(allocator);
-        specs.deinit(allocator);
-    }
+pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
+    _ = stderr_w;
 
-    try scanner.findAndSortSpecs(allocator, &specs);
+    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
+
+    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    ctx.resetScratch();
+
+    var docs = try lockfile.groupByDoc(ctx.run_arena, lf.bindings.items);
+    defer {
+        for (docs.items) |*doc| doc.bindings.deinit(ctx.run_arena);
+        docs.deinit(ctx.run_arena);
+    }
 
     switch (format) {
-        .json => writeSpecsJson(stdout_w, specs.items),
-        .text => writeSpecsText(stdout_w, specs.items),
+        .json => try writeDocsJson(stdout_w, docs.items),
+        .text => writeDocsText(stdout_w, docs.items),
     }
-
-    _ = stderr_w;
 }
 
-fn writeSpecsText(w: *std.io.Writer, specs: []const Spec) void {
-    if (specs.len == 0) return;
+fn writeDocsText(w: *std.io.Writer, docs: []const lockfile.DocBindings) void {
+    if (docs.len == 0) return;
 
-    for (specs, 0..) |spec, idx| {
+    for (docs, 0..) |doc, idx| {
         w.print("{s} ({d} anchor{s})\n", .{
-            spec.path,
-            spec.anchors.items.len,
-            if (spec.anchors.items.len == 1) "" else "s",
+            doc.path,
+            doc.bindings.items.len,
+            if (doc.bindings.items.len == 1) "" else "s",
         }) catch {};
 
-        if (spec.origin) |origin| {
-            w.print("  origin: {s}\n", .{origin}) catch {};
-        }
-
-        if (spec.anchors.items.len > 0) {
+        if (doc.bindings.items.len > 0) {
             w.print("  files:\n", .{}) catch {};
-            for (spec.anchors.items) |anchor| {
-                w.print("    - {s}\n", .{anchor}) catch {};
+            for (doc.bindings.items) |binding| {
+                w.print("    - {s}\n", .{binding.target}) catch {};
             }
         }
 
-        if (idx < specs.len - 1) {
+        if (idx < docs.len - 1) {
             w.print("\n", .{}) catch {};
         }
     }
 }
 
-fn writeSpecsJson(w: *std.io.Writer, specs: []const Spec) void {
+fn writeDocsJson(w: *std.io.Writer, docs: []const lockfile.DocBindings) !void {
     var json_w: std.json.Stringify = .{ .writer = w, .options = .{} };
 
-    json_w.beginArray() catch return;
-    for (specs) |spec| {
-        if (spec.origin) |origin| {
-            json_w.write(.{
-                .spec = spec.path,
-                .origin = origin,
-                .files = spec.anchors.items,
-            }) catch return;
-        } else {
-            json_w.write(.{
-                .spec = spec.path,
-                .files = spec.anchors.items,
-            }) catch return;
+    try json_w.beginArray();
+    for (docs) |doc| {
+        try json_w.beginObject();
+        try json_w.objectField("doc");
+        try json_w.write(doc.path);
+        try json_w.objectField("files");
+        try json_w.beginArray();
+        for (doc.bindings.items) |binding| {
+            try json_w.write(binding.target);
         }
+        try json_w.endArray();
+        try json_w.endObject();
     }
-    json_w.endArray() catch return;
-    w.writeByte('\n') catch {};
+    try json_w.endArray();
+    try w.writeByte('\n');
 }

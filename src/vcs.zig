@@ -59,13 +59,13 @@ pub fn getLastCommit(allocator: std.mem.Allocator, cwd_path: []const u8, file_pa
 pub fn checkStaleness(
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
-    spec_commit: []const u8,
+    doc_commit: []const u8,
     bound_file: []const u8,
     vcs: VcsKind,
 ) !bool {
     const result = switch (vcs) {
         .git => blk: {
-            const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{spec_commit});
+            const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{doc_commit});
             defer allocator.free(range);
             break :blk try std.process.Child.run(.{
                 .allocator = allocator,
@@ -75,7 +75,7 @@ pub fn checkStaleness(
             });
         },
         .jj => blk: {
-            const revset = try std.fmt.allocPrint(allocator, "{s}..@ & file(\"{s}\")", .{ spec_commit, bound_file });
+            const revset = try std.fmt.allocPrint(allocator, "{s}..@ & file(\"{s}\")", .{ doc_commit, bound_file });
             defer allocator.free(revset);
             break :blk try std.process.Child.run(.{
                 .allocator = allocator,
@@ -154,11 +154,39 @@ pub const BlameInfo = struct {
     }
 };
 
+fn parseBlameInfoOutput(allocator: std.mem.Allocator, stdout: []const u8) !?BlameInfo {
+    const trimmed = std.mem.trimRight(u8, stdout, "\n\r ");
+    if (trimmed.len == 0) return null;
+
+    var lines = std.mem.splitScalar(u8, trimmed, '\n');
+    const author_raw = lines.next() orelse return null;
+    const hash_raw = lines.next() orelse return null;
+    const date_raw = lines.next() orelse return null;
+    const subject_raw = lines.rest();
+    if (subject_raw.len == 0) return null;
+
+    const author = try allocator.dupe(u8, author_raw);
+    errdefer allocator.free(author);
+    const commit_hash = try allocator.dupe(u8, hash_raw);
+    errdefer allocator.free(commit_hash);
+    const date = try allocator.dupe(u8, date_raw);
+    errdefer allocator.free(date);
+    const subject = try allocator.dupe(u8, subject_raw);
+
+    return .{
+        .author = author,
+        .commit_hash = commit_hash,
+        .date = date,
+        .subject = subject,
+    };
+}
+
 /// Get blame info for the most recent commit that changed a file after a given revision.
 /// Returns null if no commits changed the file after the revision.
-/// Caller owns the returned BlameInfo and must call deinit on it.
+/// String fields are allocated with `result_allocator`. Subprocess I/O buffers use `subprocess_allocator`.
 pub fn getBlameInfo(
-    allocator: std.mem.Allocator,
+    result_allocator: std.mem.Allocator,
+    subprocess_allocator: std.mem.Allocator,
     cwd_path: []const u8,
     file_path: []const u8,
     after_revision: []const u8,
@@ -166,47 +194,47 @@ pub fn getBlameInfo(
 ) !?BlameInfo {
     switch (vcs_kind) {
         .git => {
-            const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{after_revision});
-            defer allocator.free(range);
+            const range = try std.fmt.allocPrint(subprocess_allocator, "{s}..HEAD", .{after_revision});
+            defer subprocess_allocator.free(range);
 
             const result = std.process.Child.run(.{
-                .allocator = allocator,
+                .allocator = subprocess_allocator,
                 .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", range, "--", file_path },
                 .cwd = cwd_path,
                 .max_output_bytes = 256 * 1024,
             }) catch return null;
-            defer allocator.free(result.stderr);
+            defer subprocess_allocator.free(result.stderr);
+            defer subprocess_allocator.free(result.stdout);
 
-            const stdout = result.stdout;
-            defer allocator.free(stdout);
-
-            const trimmed = std.mem.trimRight(u8, stdout, "\n\r ");
-            if (trimmed.len == 0) return null;
-
-            // Parse four newline-delimited fields: author, hash, date, subject
-            var lines = std.mem.splitScalar(u8, trimmed, '\n');
-            const author_raw = lines.next() orelse return null;
-            const hash_raw = lines.next() orelse return null;
-            const date_raw = lines.next() orelse return null;
-            const subject_raw = lines.rest();
-            if (subject_raw.len == 0) return null;
-
-            const author = try allocator.dupe(u8, author_raw);
-            errdefer allocator.free(author);
-            const commit_hash = try allocator.dupe(u8, hash_raw);
-            errdefer allocator.free(commit_hash);
-            const date = try allocator.dupe(u8, date_raw);
-            errdefer allocator.free(date);
-            const subject = try allocator.dupe(u8, subject_raw);
-
-            return .{
-                .author = author,
-                .commit_hash = commit_hash,
-                .date = date,
-                .subject = subject,
-            };
+            return try parseBlameInfoOutput(result_allocator, result.stdout);
         },
         .jj => return null, // jj support disabled
+    }
+}
+
+/// Get blame info for the most recent commit that touched a file, regardless of baseline.
+/// String fields are allocated with `result_allocator`. Subprocess I/O buffers use `subprocess_allocator`.
+pub fn getLatestBlameInfo(
+    result_allocator: std.mem.Allocator,
+    subprocess_allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    file_path: []const u8,
+    vcs_kind: VcsKind,
+) !?BlameInfo {
+    switch (vcs_kind) {
+        .git => {
+            const result = std.process.Child.run(.{
+                .allocator = subprocess_allocator,
+                .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", "--", file_path },
+                .cwd = cwd_path,
+                .max_output_bytes = 256 * 1024,
+            }) catch return null;
+            defer subprocess_allocator.free(result.stderr);
+            defer subprocess_allocator.free(result.stdout);
+
+            return try parseBlameInfoOutput(result_allocator, result.stdout);
+        },
+        .jj => return null,
     }
 }
 
@@ -247,15 +275,16 @@ pub fn normalizeGitHubUrl(allocator: std.mem.Allocator, url: []const u8) ?[]cons
 
 /// Get the normalized repo identity by querying `git remote get-url origin`.
 /// Returns `github:owner/repo` or null if not a GitHub remote.
-pub fn getRepoIdentity(allocator: std.mem.Allocator, cwd_path: []const u8) ?[]const u8 {
+/// Result string is allocated with `result_allocator`; subprocess buffers use `subprocess_allocator`.
+pub fn getRepoIdentity(result_allocator: std.mem.Allocator, subprocess_allocator: std.mem.Allocator, cwd_path: []const u8) ?[]const u8 {
     const result = std.process.Child.run(.{
-        .allocator = allocator,
+        .allocator = subprocess_allocator,
         .argv = &.{ "git", "remote", "get-url", "origin" },
         .cwd = cwd_path,
         .max_output_bytes = 4096,
     }) catch return null;
-    defer allocator.free(result.stderr);
-    defer allocator.free(result.stdout);
+    defer subprocess_allocator.free(result.stderr);
+    defer subprocess_allocator.free(result.stdout);
 
     switch (result.term) {
         .Exited => |code| if (code != 0) return null,
@@ -265,7 +294,7 @@ pub fn getRepoIdentity(allocator: std.mem.Allocator, cwd_path: []const u8) ?[]co
     const trimmed = std.mem.trimRight(u8, result.stdout, "\n\r ");
     if (trimmed.len == 0) return null;
 
-    return normalizeGitHubUrl(allocator, trimmed);
+    return normalizeGitHubUrl(result_allocator, trimmed);
 }
 
 /// Get the current change/commit ID (short form) for auto-provenance.

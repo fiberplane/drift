@@ -1,5 +1,5 @@
 name: Setup Drift
-description: Install the drift CLI for spec-to-code staleness checking with checksum verification
+description: Install the drift CLI for doc-to-code staleness checking with checksum verification
 inputs:
   version:
     description: Release tag to install (e.g. "v0.1.0"). Defaults to latest.

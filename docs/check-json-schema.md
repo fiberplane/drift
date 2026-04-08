@@ -38,7 +38,7 @@ fields remain valid without updating the schema file immediately.
   "repo": "github:owner/name" | null,
   "checked_at_ms": 1733000000000,
   "summary": { ... },
-  "specs": [ ... ]
+  "docs": [ ... ]
 }
 ```
 
@@ -50,7 +50,7 @@ fields remain valid without updating the schema file immediately.
 | `repo` | string \| null | Repo identity (e.g. `github:owner/name`) when detectable, else `null`. |
 | `checked_at_ms` | integer | Wall-clock time of the run, **milliseconds since Unix epoch**. The `_ms` suffix is intentional — bare `checked_at` would be ambiguous (s/ms/us/ns). |
 | `summary` | object | Aggregate counts and overall result. See below. |
-| `specs` | array | One entry per discovered spec, in scanner order. |
+| `docs` | array | One entry per discovered doc, in scanner order. |
 
 ## `summary`
 
@@ -58,11 +58,11 @@ fields remain valid without updating the schema file immediately.
 {
   "result": "pass" | "fail",
   "verification_state": "none" | "partial" | "full",
-  "specs_total": 3,
-  "specs_checked": 2,
-  "specs_skipped": 1,
-  "specs_fresh": 2,
-  "specs_stale": 0,
+  "docs_total": 3,
+  "docs_checked": 2,
+  "docs_skipped": 1,
+  "docs_fresh": 2,
+  "docs_stale": 0,
   "anchors_total": 7,
   "anchors_fresh": 5,
   "anchors_stale": 0,
@@ -74,18 +74,18 @@ fields remain valid without updating the schema file immediately.
   process exit code.
 - `verification_state` describes **coverage**: how much of the discovered work was
   actually verified versus skipped (e.g. origin mismatch).
-  - `"none"`: `specs_total > 0` but `specs_checked == 0` — every spec was skipped, so
+  - `"none"`: `docs_total > 0` but `docs_checked == 0` — every doc was skipped, so
     no staleness verification ran. CI dashboards should treat this as a yellow signal:
     `result` may still be `"pass"`.
-  - `"partial"`: some specs were checked and some skipped (`specs_checked > 0` and
-    `specs_skipped > 0`).
-  - `"full"`: nothing was skipped (`specs_skipped == 0`), including the case
-    `specs_total == 0` (no specs to skip).
-- `specs_checked` is `specs_fresh + specs_stale` — specs that were not skipped.
+  - `"partial"`: some docs were checked and some skipped (`docs_checked > 0` and
+    `docs_skipped > 0`).
+  - `"full"`: nothing was skipped (`docs_skipped == 0`), including the case
+    `docs_total == 0` (no docs to skip).
+- `docs_checked` is `docs_fresh + docs_stale` — docs that were not skipped.
 - All counts are non-negative integers;
-  `specs_fresh + specs_stale + specs_skipped == specs_total`.
+  `docs_fresh + docs_stale + docs_skipped == docs_total`.
 
-## `specs[*]`
+## `docs[*]`
 
 ```json
 {
@@ -96,10 +96,10 @@ fields remain valid without updating the schema file immediately.
 }
 ```
 
-A spec's `result` is the worst of its anchors (`stale > skip > fresh`). A spec with
+A doc's `result` is the worst of its anchors (`stale > skip > fresh`). A doc with
 zero anchors is `"fresh"`.
 
-## `specs[*].anchors[*]`
+## `docs[*].anchors[*]`
 
 ```json
 {
@@ -117,7 +117,7 @@ zero anchors is `"fresh"`.
 
 - `identity` is the anchor stripped of its `@provenance` suffix — stable, used by the
   link/unlink commands as the canonical anchor handle.
-- `raw` is the original anchor string from the spec, suffix included.
+- `raw` is the original anchor string from the doc, suffix included.
 - `kind` is `"symbol"` if `identity` contains a `#`, else `"file"`.
 - `provenance.kind` is `"sig"` for content fingerprints (`@sig:hex`) or `"vcs"` for a
   raw commit hash. `null` when the anchor has no provenance suffix.
@@ -139,7 +139,7 @@ zero anchors is `"fresh"`.
 | `symbol_not_found` | A `file#Symbol` anchor's symbol is no longer present. |
 | `fingerprint_unavailable` | A `@sig:` anchor could not be re-fingerprinted (e.g. unknown language). |
 | `baseline_unavailable` | Reserved — historical baseline could not be retrieved. (Not currently emitted; held for forward compatibility.) |
-| `origin_mismatch` | The spec's `origin:` does not match the current repo identity. Anchors are skipped. |
+| `origin_mismatch` | The doc's `origin:` does not match the current repo identity. Anchors are skipped. |
 
 `reason.message` strings are stable in `v1` and asserted by tests. Changing one is a
 schema bump.
@@ -148,8 +148,8 @@ schema bump.
 
 This is `drift.check.v1`. Within this identifier:
 
-- New fields **may** be added at the top level, in `summary`, in `specs[*]`, or in
-  `specs[*].anchors[*]`. Consumers must ignore unknown fields.
+- New fields **may** be added at the top level, in `summary`, in `docs[*]`, or in
+  `docs[*].anchors[*]`. Consumers must ignore unknown fields.
 - New `reason.code` values **may** be added. Consumers should handle unknown codes
   gracefully (e.g. fall back to `reason.message`).
 - Existing field names, types, and units **will not** change. Renaming
@@ -168,17 +168,17 @@ This is `drift.check.v1`. Within this identifier:
   "summary": {
     "result": "fail",
     "verification_state": "full",
-    "specs_total": 1,
-    "specs_checked": 1,
-    "specs_skipped": 0,
-    "specs_fresh": 0,
-    "specs_stale": 1,
+    "docs_total": 1,
+    "docs_checked": 1,
+    "docs_skipped": 0,
+    "docs_fresh": 0,
+    "docs_stale": 1,
     "anchors_total": 1,
     "anchors_fresh": 0,
     "anchors_stale": 1,
     "anchors_skipped": 0
   },
-  "specs": [{
+  "docs": [{
     "path": "docs/auth.md",
     "origin": null,
     "result": "stale",
@@ -190,7 +190,7 @@ This is `drift.check.v1`. Within this identifier:
       "symbol": null,
       "provenance": { "kind": "sig", "value": "abc123..." },
       "result": "stale",
-      "reason": { "code": "changed_after_baseline", "message": "changed after spec" },
+      "reason": { "code": "changed_after_baseline", "message": "changed after doc" },
       "blame": {
         "author": "Alice",
         "commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",

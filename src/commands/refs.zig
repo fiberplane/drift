@@ -3,52 +3,28 @@ const CommandContext = @import("../context.zig").CommandContext;
 const frontmatter = @import("../frontmatter.zig");
 const lockfile = @import("../lockfile.zig");
 
-pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, doc_path: []const u8, anchor: []const u8) !void {
+pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, raw_target: []const u8) !void {
     _ = stderr_w;
 
     const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
 
-    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
     if (!lf.exists) return;
 
     ctx.resetScratch();
-    const normalized_doc_path = try normalizeSpecPath(ctx, lf.root_path, cwd_path, doc_path);
-    ctx.resetScratch();
+    const normalized_target = try normalizeTargetPath(ctx, lf.root_path, cwd_path, raw_target);
 
-    ctx.resetScratch();
-    const normalized_target = try normalizeTargetPath(ctx, lf.root_path, cwd_path, anchor);
-    ctx.resetScratch();
+    var printed: std.StringHashMap(void) = std.StringHashMap(void).init(ctx.run_arena);
+    defer printed.deinit();
 
-    var removed = false;
-    var i: usize = 0;
-    while (i < lf.bindings.items.len) {
-        const binding = &lf.bindings.items[i];
-        if (std.mem.eql(u8, binding.doc_path, normalized_doc_path) and std.mem.eql(u8, binding.target, normalized_target)) {
-            _ = lf.bindings.orderedRemove(i);
-            removed = true;
-            continue;
-        }
-        i += 1;
+    for (lf.bindings.items) |binding| {
+        if (!std.mem.eql(u8, binding.target, normalized_target)) continue;
+        if (printed.contains(binding.doc_path)) continue;
+        try printed.put(binding.doc_path, {});
+        stdout_w.print("{s}\n", .{binding.doc_path}) catch {};
     }
-
-    if (!removed) return;
-
-    try lockfile.writeFile(&lf, ctx.scratch());
-    stdout_w.print("removed {s} -> {s} from drift.lock\n", .{ normalized_doc_path, normalized_target }) catch {};
-}
-
-fn normalizeSpecPath(
-    ctx: CommandContext,
-    root_path: []const u8,
-    cwd_path: []const u8,
-    doc_path: []const u8,
-) ![]const u8 {
-    const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
-    ctx.resetScratch();
-    return relative;
 }
 
 fn normalizeTargetPath(

@@ -1,0 +1,7 @@
+.claude/skills/drift/SKILL.md -> src/frontmatter.zig sig:5b6678b3877afcbb origin:github:fiberplane/drift
+.claude/skills/drift/SKILL.md -> src/main.zig sig:28d8968cf0ed7357 origin:github:fiberplane/drift
+.claude/skills/drift/SKILL.md -> src/scanner.zig sig:21eca899d9b517c1 origin:github:fiberplane/drift
+.claude/skills/drift/SKILL.md -> src/vcs.zig sig:2468937f00d5305a origin:github:fiberplane/drift
+docs/RELEASING.md -> .github/workflows/ci.yml sig:e8440b1d7ee3e4ba
+docs/RELEASING.md -> .github/workflows/release.yml sig:f74d66b6bd7f959c
+docs/RELEASING.md -> cliff.toml sig:d2a8e301fe4b788e

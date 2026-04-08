@@ -1,167 +1,247 @@
 const std = @import("std");
+const CommandContext = @import("../context.zig").CommandContext;
 const frontmatter = @import("../frontmatter.zig");
-const scanner = @import("../scanner.zig");
+const lockfile = @import("../lockfile.zig");
 const symbols = @import("../symbols.zig");
-const vcs = @import("../vcs.zig");
+
+pub const RunError = error{ DocReadFailed, DocWriteFailed, NoBindingsForDoc, CannotComputeFingerprint };
 
 pub fn run(
-    allocator: std.mem.Allocator,
+    ctx: CommandContext,
     stdout_w: *std.io.Writer,
     stderr_w: *std.io.Writer,
-    spec_path: []const u8,
+    doc_path: []const u8,
     optional_anchor: ?[]const u8,
 ) !void {
-    const cwd_path = std.fs.cwd().realpathAlloc(allocator, ".") catch |err| {
-        stderr_w.print("cannot resolve cwd: {s}\n", .{@errorName(err)}) catch {};
-        return err;
-    };
-    defer allocator.free(cwd_path);
+    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
 
-    const detected_vcs = vcs.detectVcs();
-    const auto_change_id = vcs.getCurrentChangeId(allocator, cwd_path, detected_vcs) catch null;
-    defer if (auto_change_id) |cid| allocator.free(cid);
+    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    ctx.resetScratch();
 
-    const cwd = std.fs.cwd();
-    const content = cwd.readFileAlloc(allocator, spec_path, 1024 * 1024) catch |err| {
-        stderr_w.print("cannot read {s}: {s}\n", .{ spec_path, @errorName(err) }) catch {};
-        return err;
+    const content = std.fs.cwd().readFileAlloc(ctx.run_arena, doc_path, 1024 * 1024) catch |err| {
+        stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
+        return error.DocReadFailed;
     };
-    defer allocator.free(content);
+
+    ctx.resetScratch();
+    const normalized_doc_path = try normalizeSpecPath(ctx, lf.root_path, cwd_path, doc_path);
+    ctx.resetScratch();
+
+    const parsed_legacy = try frontmatter.parseDriftDoc(ctx.run_arena, content);
+
+    if (parsed_legacy) |legacy| {
+        try migrateLegacyBindings(ctx, &lf, cwd_path, normalized_doc_path, legacy.anchors.items, legacy.origin);
+    }
 
     if (optional_anchor) |raw_anchor| {
-        try linkTargeted(allocator, stdout_w, stderr_w, spec_path, raw_anchor, content, auto_change_id);
-    } else {
-        try linkBlanket(allocator, stdout_w, stderr_w, spec_path, content, auto_change_id);
+        ctx.resetScratch();
+        const normalized_target = try normalizeTargetPath(ctx, lf.root_path, cwd_path, raw_anchor);
+        ctx.resetScratch();
+
+        try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target, if (parsed_legacy) |legacy| legacy.origin else null);
+        try lockfile.writeFile(&lf, ctx.scratch());
+
+        if (parsed_legacy != null) {
+            try stripLegacySpecFile(ctx, doc_path, content, stderr_w);
+        }
+
+        const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
+        stdout_w.print("added {s} -> {s}", .{ normalized_doc_path, binding.target }) catch {};
+        if (binding.fieldValue("sig")) |sig| {
+            stdout_w.print(" sig:{s}", .{sig}) catch {};
+        }
+        stdout_w.print("\n", .{}) catch {};
+        return;
+    }
+
+    var relinked_any = false;
+    for (lf.bindings.items) |*binding| {
+        if (!std.mem.eql(u8, binding.doc_path, normalized_doc_path)) continue;
+        try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
+        relinked_any = true;
+    }
+
+    if (!relinked_any and parsed_legacy == null) {
+        stderr_w.print("no bindings found for {s}\n", .{normalized_doc_path}) catch {};
+        return error.NoBindingsForDoc;
+    }
+
+    try lockfile.writeFile(&lf, ctx.scratch());
+
+    if (parsed_legacy != null) {
+        try stripLegacySpecFile(ctx, doc_path, content, stderr_w);
+    }
+
+    stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
+}
+
+fn migrateLegacyBindings(
+    ctx: CommandContext,
+    lf: *lockfile.Lockfile,
+    cwd_path: []const u8,
+    normalized_doc_path: []const u8,
+    legacy_anchors: []const []const u8,
+    origin: ?[]const u8,
+) !void {
+    for (legacy_anchors) |legacy_anchor| {
+        ctx.resetScratch();
+        const normalized_target = try normalizeTargetPath(ctx, lf.root_path, cwd_path, legacy_anchor);
+        ctx.resetScratch();
+        try upsertBinding(ctx, lf, cwd_path, normalized_doc_path, normalized_target, origin);
     }
 }
 
-fn linkTargeted(
-    allocator: std.mem.Allocator,
-    stdout_w: *std.io.Writer,
-    stderr_w: *std.io.Writer,
-    spec_path: []const u8,
-    raw_anchor: []const u8,
-    content: []const u8,
-    auto_change_id: ?[]const u8,
+fn upsertBinding(
+    ctx: CommandContext,
+    lf: *lockfile.Lockfile,
+    cwd_path: []const u8,
+    normalized_doc_path: []const u8,
+    normalized_target: []const u8,
+    origin: ?[]const u8,
 ) !void {
-    const anchor = blk: {
-        const identity = frontmatter.anchorFileIdentity(raw_anchor);
-        if (identity.len != raw_anchor.len) {
-            break :blk raw_anchor;
+    if (findBinding(lf.bindings.items, normalized_doc_path, normalized_target)) |binding| {
+        try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
+        if (origin) |o| {
+            try binding.setField(ctx.run_arena, "origin", o);
         }
-        const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-        const target_file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-        const target_symbol = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+        return;
+    }
 
-        if (symbols.computeContentSig(allocator, target_file_path, target_symbol)) |sig| {
-            defer allocator.free(sig);
-            break :blk std.fmt.allocPrint(allocator, "{s}@{s}", .{ raw_anchor, sig }) catch break :blk raw_anchor;
-        }
-        if (auto_change_id) |cid| {
-            break :blk std.fmt.allocPrint(allocator, "{s}@{s}", .{ raw_anchor, cid }) catch break :blk raw_anchor;
-        }
-        break :blk raw_anchor;
+    var binding = lockfile.Binding{
+        .doc_path = try ctx.run_arena.dupe(u8, normalized_doc_path),
+        .target = try ctx.run_arena.dupe(u8, normalized_target),
+        .metadata = .{},
     };
-    const anchor_owned = anchor.ptr != raw_anchor.ptr;
-    defer if (anchor_owned) allocator.free(anchor);
+    errdefer binding.metadata.deinit(ctx.run_arena);
 
-    const after_frontmatter = try frontmatter.linkAnchor(allocator, content, anchor);
-    defer allocator.free(after_frontmatter);
+    try refreshBindingSig(ctx, cwd_path, lf.root_path, &binding);
+    if (origin) |o| {
+        try binding.setField(ctx.run_arena, "origin", o);
+    }
 
-    const target_file = frontmatter.anchorFileIdentity(raw_anchor);
-    const target_hash_pos = std.mem.indexOfScalar(u8, target_file, '#');
-    const target_path = if (target_hash_pos) |pos| target_file[0..pos] else target_file;
-
-    const anchor_identity = frontmatter.anchorFileIdentity(anchor);
-    const inline_provenance = if (anchor_identity.len < anchor.len) anchor[anchor_identity.len + 1 ..] else if (auto_change_id) |cid| cid else "unknown";
-    const final_result = try scanner.updateInlineAnchors(allocator, after_frontmatter, target_path, inline_provenance);
-    defer allocator.free(final_result);
-
-    const file = std.fs.cwd().openFile(spec_path, .{ .mode = .write_only }) catch |err| {
-        stderr_w.print("cannot write {s}: {s}\n", .{ spec_path, @errorName(err) }) catch {};
-        return err;
-    };
-    defer file.close();
-
-    try file.writeAll(final_result);
-    try file.setEndPos(final_result.len);
-
-    stdout_w.print("added {s} to {s}\n", .{ anchor, spec_path }) catch {};
+    try lf.bindings.append(ctx.run_arena, binding);
 }
 
-fn linkBlanket(
-    allocator: std.mem.Allocator,
-    stdout_w: *std.io.Writer,
-    stderr_w: *std.io.Writer,
-    spec_path: []const u8,
-    content: []const u8,
-    auto_change_id: ?[]const u8,
+fn refreshBindingSig(
+    ctx: CommandContext,
+    cwd_path: []const u8,
+    root_path: []const u8,
+    binding: *lockfile.Binding,
 ) !void {
-    const parsed_spec = frontmatter.parseDriftSpec(allocator, content);
-    defer if (parsed_spec) |*ps| {
-        var a = ps.anchors;
-        for (a.items) |b| allocator.free(b);
-        a.deinit(allocator);
-        if (ps.origin) |o| allocator.free(o);
-    };
+    var hex: [16]u8 = undefined;
+    try computeTargetSigInto(ctx, cwd_path, root_path, binding.target, &hex);
+    try binding.setField(ctx.run_arena, "sig", hex[0..16]);
+}
 
-    var intermediate: []const u8 = try allocator.dupe(u8, content);
+fn computeTargetSigInto(
+    ctx: CommandContext,
+    cwd_path: []const u8,
+    root_path: []const u8,
+    target: []const u8,
+    hex_out: *[16]u8,
+) !void {
+    const identity = frontmatter.anchorFileIdentity(target);
+    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
+    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
+    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
 
-    if (parsed_spec) |drift_spec| {
-        for (drift_spec.anchors.items) |existing_anchor| {
-            const identity = frontmatter.anchorFileIdentity(existing_anchor);
-            const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-            const anchor_file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-            const anchor_symbol = if (hash_pos) |pos| identity[pos + 1 ..] else null;
-
-            const sig = symbols.computeContentSig(allocator, anchor_file_path, anchor_symbol);
-            defer if (sig) |s| allocator.free(s);
-
-            const provenance = sig orelse (auto_change_id orelse continue);
-            const new_anchor = std.fmt.allocPrint(allocator, "{s}@{s}", .{ identity, provenance }) catch continue;
-            defer allocator.free(new_anchor);
-
-            const updated = frontmatter.linkAnchor(allocator, intermediate, new_anchor) catch continue;
-            allocator.free(intermediate);
-            intermediate = updated;
-        }
+    const absolute_path = try resolveInputPath(ctx, root_path, cwd_path, file_part);
+    const content = try readResolvedFile(ctx, absolute_path);
+    if (!symbols.writeFingerprintHex(hex_out, content, file_part, symbol_name)) {
+        ctx.resetScratch();
+        return error.CannotComputeFingerprint;
     }
+    ctx.resetScratch();
+}
 
-    const body_content = intermediate;
-    var inline_anchors = scanner.parseInlineAnchors(allocator, body_content);
-    defer {
-        for (inline_anchors.items) |a| allocator.free(a);
-        inline_anchors.deinit(allocator);
-    }
+fn stripLegacySpecFile(
+    ctx: CommandContext,
+    doc_path: []const u8,
+    content: []const u8,
+    stderr_w: *std.io.Writer,
+) !void {
+    const stripped = try frontmatter.stripLegacyDriftMetadata(ctx.run_arena, content);
 
-    var after_inline: []const u8 = try allocator.dupe(u8, intermediate);
-    allocator.free(intermediate);
-
-    for (inline_anchors.items) |inline_anchor| {
-        const inline_identity = frontmatter.anchorFileIdentity(inline_anchor);
-        const inline_hash_pos = std.mem.indexOfScalar(u8, inline_identity, '#');
-        const inline_file_path = if (inline_hash_pos) |pos| inline_identity[0..pos] else inline_identity;
-        const inline_symbol = if (inline_hash_pos) |pos| inline_identity[pos + 1 ..] else null;
-
-        const inline_sig = symbols.computeContentSig(allocator, inline_file_path, inline_symbol);
-        defer if (inline_sig) |s| allocator.free(s);
-
-        const inline_provenance = inline_sig orelse (auto_change_id orelse continue);
-        const updated_inline = scanner.updateInlineAnchors(allocator, after_inline, inline_file_path, inline_provenance) catch continue;
-        allocator.free(after_inline);
-        after_inline = updated_inline;
-    }
-
-    const file = std.fs.cwd().openFile(spec_path, .{ .mode = .write_only }) catch |err| {
-        stderr_w.print("cannot write {s}: {s}\n", .{ spec_path, @errorName(err) }) catch {};
-        allocator.free(after_inline);
-        return err;
+    const file = std.fs.cwd().createFile(doc_path, .{ .truncate = true }) catch |err| {
+        stderr_w.print("error: cannot write '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
+        return error.DocWriteFailed;
     };
     defer file.close();
+    try file.writeAll(stripped);
+}
 
-    try file.writeAll(after_inline);
-    try file.setEndPos(after_inline.len);
-    allocator.free(after_inline);
+fn normalizeSpecPath(
+    ctx: CommandContext,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    doc_path: []const u8,
+) ![]const u8 {
+    const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
+    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    ctx.resetScratch();
+    return relative;
+}
 
-    stdout_w.print("relinked all anchors in {s}\n", .{spec_path}) catch {};
+fn normalizeTargetPath(
+    ctx: CommandContext,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    raw_target: []const u8,
+) ![]const u8 {
+    const identity = frontmatter.anchorFileIdentity(raw_target);
+    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
+    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
+    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+
+    const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
+    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    ctx.resetScratch();
+
+    if (symbol_name) |symbol| {
+        return try std.fmt.allocPrint(ctx.run_arena, "{s}#{s}", .{ relative, symbol });
+    }
+    return relative;
+}
+
+fn resolveInputPath(
+    ctx: CommandContext,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    path: []const u8,
+) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return try ctx.scratch().dupe(u8, path);
+    }
+
+    const cwd_candidate = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, path });
+    if (pathExists(cwd_candidate)) return cwd_candidate;
+
+    return try std.fs.path.resolve(ctx.scratch(), &.{ root_path, path });
+}
+
+fn pathExists(path: []const u8) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        std.fs.accessAbsolute(path, .{}) catch return false;
+        return true;
+    }
+    std.fs.cwd().access(path, .{}) catch return false;
+    return true;
+}
+
+fn readResolvedFile(ctx: CommandContext, path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        const file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+        return try file.readToEndAlloc(ctx.scratch(), 1024 * 1024);
+    }
+    return try std.fs.cwd().readFileAlloc(ctx.scratch(), path, 1024 * 1024);
+}
+
+fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, target: []const u8) ?*lockfile.Binding {
+    for (bindings) |*binding| {
+        if (std.mem.eql(u8, binding.doc_path, doc_path) and std.mem.eql(u8, binding.target, target)) {
+            return binding;
+        }
+    }
+    return null;
 }

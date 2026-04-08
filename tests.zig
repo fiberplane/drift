@@ -1,5 +1,6 @@
 test {
     _ = @import("src/main.zig");
+    _ = @import("src/lockfile.zig");
     _ = @import("test/payload_validate_test.zig");
 
     // Integration tests
@@ -7,4 +8,5 @@ test {
     _ = @import("test/integration/status_test.zig");
     _ = @import("test/integration/link_test.zig");
     _ = @import("test/integration/unlink_test.zig");
+    _ = @import("test/integration/refs_test.zig");
 }
