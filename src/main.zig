@@ -29,10 +29,21 @@ const main_parsers = .{
     .command = clap.parsers.enumeration(SubCommand),
 };
 
-const status_params = clap.parseParamsComptime(
+// Shared by `check`, `lint`, and `status`. All three accept `--format <text|json>`
+// (default text). Validation lives in `parseFormat` so an unknown value errors out
+// instead of silently falling through to text.
+const format_params = clap.parseParamsComptime(
     \\--format <str>
     \\
 );
+
+fn parseFormat(maybe_value: ?[]const u8, stderr_w: *std.Io.Writer) !lint.Format {
+    const value = maybe_value orelse return .text;
+    if (std.mem.eql(u8, value, "json")) return .json;
+    if (std.mem.eql(u8, value, "text")) return .text;
+    stderr_w.print("error: unknown --format value '{s}' (expected 'text' or 'json')\n", .{value}) catch {};
+    return error.InvalidFormat;
+}
 
 const link_params = clap.parseParamsComptime(
     \\<spec>
@@ -112,18 +123,35 @@ pub fn main() !void {
     };
 
     switch (command) {
-        .check, .lint => lint.run(allocator, &stdout_w.interface, &stderr_w.interface) catch |err| {
-            exitWithCommandError(&stderr_w.interface, "lint", err);
-        },
-        .status => {
-            var sub = try parseExOrReport(&status_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+        .check, .lint => {
+            var sub = try parseExOrReport(&format_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift status [--format json]\n", .{}) catch {};
+                stderr_w.interface.print("usage: drift check [--format text|json]\n", .{}) catch {};
                 return error.InvalidArgument;
             }
-            const format_json = if (sub.args.format) |f| std.mem.eql(u8, f, "json") else false;
-            status.run(allocator, &stdout_w.interface, &stderr_w.interface, format_json) catch |err| {
+            const format = try parseFormat(sub.args.format, &stderr_w.interface);
+            const run_status = lint.run(allocator, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
+                exitWithCommandError(&stderr_w.interface, "check", err);
+            };
+            // Exit-on-stale lives here (not in lint.run) so all `defer`s in run unwind
+            // before the process dies. std.process.exit calls libc exit, which does not
+            // run Zig defers — putting the exit in run leaks the result model.
+            if (run_status == .stale) {
+                stdout_w.interface.flush() catch {};
+                stderr_w.interface.flush() catch {};
+                std.process.exit(1);
+            }
+        },
+        .status => {
+            var sub = try parseExOrReport(&format_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            defer sub.deinit();
+            if (iter.next()) |_| {
+                stderr_w.interface.print("usage: drift status [--format text|json]\n", .{}) catch {};
+                return error.InvalidArgument;
+            }
+            const format = try parseFormat(sub.args.format, &stderr_w.interface);
+            status.run(allocator, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "status", err);
             };
         },
@@ -173,14 +201,16 @@ fn printUsage(w: *std.io.Writer) void {
         \\Usage: drift <command> [options]
         \\
         \\Commands:
-        \\  check     Check all specs for staleness
-        \\  status    Show all specs and their anchors
+        \\  check     Check all specs for staleness  [--format text|json]
+        \\  status    Show all specs and their anchors  [--format text|json]
         \\  link      Add anchors to a spec
         \\  unlink    Remove anchors from a spec
         \\
         \\Options:
         \\  -h, --help     Show this help message
         \\  -V, --version  Show version
+        \\
+        \\JSON output is documented in docs/check-json-schema.md (drift.check.v1).
         \\
     , .{}) catch {};
 }

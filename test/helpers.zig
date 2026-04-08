@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const payload = @import("payload");
 
 /// Result returned by runDrift.
 pub const ExecResult = struct {
@@ -188,4 +189,15 @@ pub fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
         std.debug.print("\n--- Expected NOT to find ---\n{s}\n--- in output ---\n{s}\n--- end ---\n", .{ needle, haystack });
         return error.TestUnexpectedResult;
     }
+}
+
+/// Parse stdout from `drift check --format json` as `payload.DriftCheckV1` and run payload validation.
+pub fn validateDriftCheckJson(allocator: std.mem.Allocator, json_text: []const u8) !void {
+    var parsed = try std.json.parseFromSlice(payload.DriftCheckV1, allocator, json_text, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    payload.validateJsonDocument(parsed.value) catch {
+        return error.TestUnexpectedResult;
+    };
 }

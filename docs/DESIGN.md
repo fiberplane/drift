@@ -1,11 +1,11 @@
 ---
 drift:
   files:
-    - src/main.zig@sig:1f0ab611cebf2ea0
+    - src/main.zig@sig:3560999bb08f8512
     - src/frontmatter.zig@sig:ef9880e4f1a96c16
     - src/scanner.zig@sig:9ccfb8091a6c8ef2
     - src/symbols.zig@sig:1f41e745e5e32c2d
-    - src/vcs.zig@sig:af1279e1afd6b10d
+    - src/vcs.zig@sig:b9481e9cf295501a
 ---
 
 # Design
@@ -143,7 +143,9 @@ docs/auth.md
          "refactor: split auth config into separate concerns"
 ```
 
-This is a free byproduct of the VCS query — `git log` gives author and message.
+Text mode prints the **author** name, an abbreviated commit id, the **committer** date (for the timestamp line), and the subject — sourced from `git log` / blame queries on the revision that last touched the anchor.
+
+With `--format json`, the stable `drift.check.v1` document carries the same fields in structured form: `blame.author`, full `blame.commit`, `blame.date`, and `blame.subject`. The `date` field is the **committer** date in ISO 8601 strict form (`git --date=iso-strict`), so it stays comparable and sortable after rebases or cherry-picks (author date can differ). See [`check-json-schema.md`](./check-json-schema.md) for the full schema and summary fields such as `verification_state`.
 
 ### Missing Anchors
 

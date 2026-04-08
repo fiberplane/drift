@@ -1,9 +1,11 @@
 const std = @import("std");
 const scanner = @import("../scanner.zig");
+const lint = @import("lint.zig");
 
 const Spec = scanner.Spec;
+pub const Format = lint.Format;
 
-pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format_json: bool) !void {
+pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
     var specs: std.ArrayList(Spec) = .{};
     defer {
         for (specs.items) |*s| s.deinit(allocator);
@@ -12,10 +14,9 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
 
     try scanner.findAndSortSpecs(allocator, &specs);
 
-    if (format_json) {
-        writeSpecsJson(stdout_w, specs.items);
-    } else {
-        writeSpecsText(stdout_w, specs.items);
+    switch (format) {
+        .json => writeSpecsJson(stdout_w, specs.items),
+        .text => writeSpecsText(stdout_w, specs.items),
     }
 
     _ = stderr_w;

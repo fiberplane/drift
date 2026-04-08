@@ -535,6 +535,356 @@ test "lint includes blame info when anchored file changed after spec" {
     try helpers.expectContains(output, "refactor: update main return value");
 }
 
+test "check --format json produces valid JSON with correct structure" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("src/main.ts", "export function main() {}\n");
+    try repo.writeSpec("docs/spec.md", &.{"src/main.ts"}, "# Spec\n");
+    try repo.commit("add spec and source");
+
+    // Link to get a sig provenance
+    const link_result = try repo.runDrift(&.{ "link", "docs/spec.md", "src/main.ts" });
+    defer link_result.deinit(allocator);
+    try helpers.expectExitCode(link_result.term, 0);
+    try repo.commit("link spec");
+
+    // Check with JSON format — should be fresh
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 0);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const CheckPayload = struct {
+        schema_version: []const u8,
+        tool: []const u8,
+        summary: struct {
+            result: []const u8,
+            specs_total: u32,
+            specs_fresh: u32,
+            specs_stale: u32,
+            anchors_total: u32,
+            anchors_fresh: u32,
+            anchors_stale: u32,
+        },
+        specs: []const struct {
+            path: []const u8,
+            result: []const u8,
+            anchors: []const struct {
+                identity: []const u8,
+                kind: []const u8,
+                path: []const u8,
+                result: []const u8,
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(CheckPayload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("drift.check.v1", parsed.value.schema_version);
+    try std.testing.expectEqualStrings("drift", parsed.value.tool);
+    try std.testing.expectEqualStrings("pass", parsed.value.summary.result);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_total);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_fresh);
+    try std.testing.expectEqual(@as(u32, 0), parsed.value.summary.specs_stale);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.specs.len);
+    try std.testing.expectEqualStrings("docs/spec.md", parsed.value.specs[0].path);
+    try std.testing.expectEqualStrings("fresh", parsed.value.specs[0].result);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.specs[0].anchors.len);
+    try std.testing.expectEqualStrings("src/main.ts", parsed.value.specs[0].anchors[0].identity);
+    try std.testing.expectEqualStrings("file", parsed.value.specs[0].anchors[0].kind);
+    try std.testing.expectEqualStrings("fresh", parsed.value.specs[0].anchors[0].result);
+}
+
+test "check --format json reports stale anchors with reason" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("src/main.ts", "export function main() {}\n");
+    try repo.writeSpec("docs/spec.md", &.{"src/main.ts"}, "# Spec\n");
+    try repo.commit("add spec and source");
+
+    // Link, commit, then modify the file
+    const link_result = try repo.runDrift(&.{ "link", "docs/spec.md", "src/main.ts" });
+    defer link_result.deinit(allocator);
+    try repo.commit("link spec");
+
+    try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
+    try repo.commit("modify source");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 1);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const CheckPayload = struct {
+        summary: struct { result: []const u8, specs_stale: u32, anchors_stale: u32 },
+        specs: []const struct {
+            result: []const u8,
+            anchors: []const struct {
+                result: []const u8,
+                reason: ?struct { code: []const u8, message: []const u8 },
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(CheckPayload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("fail", parsed.value.summary.result);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_stale);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.anchors_stale);
+    try std.testing.expectEqualStrings("stale", parsed.value.specs[0].result);
+    try std.testing.expectEqualStrings("stale", parsed.value.specs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("changed_after_baseline", parsed.value.specs[0].anchors[0].reason.?.code);
+}
+
+test "check --format json reports missing file" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeSpec("docs/spec.md", &.{"src/missing.ts"}, "# Spec\n");
+    try repo.commit("add spec with missing anchor");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 1);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const CheckPayload = struct {
+        specs: []const struct {
+            anchors: []const struct {
+                result: []const u8,
+                reason: ?struct { code: []const u8 },
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(CheckPayload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("stale", parsed.value.specs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("file_not_found", parsed.value.specs[0].anchors[0].reason.?.code);
+}
+
+test "check --format json includes tool_version, checked_at_ms, and provenance shape" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("src/main.ts", "export function main() {}\n");
+    try repo.writeSpec("docs/spec.md", &.{"src/main.ts"}, "# Spec\n");
+    try repo.commit("add spec and source");
+
+    // `drift link` writes a `@sig:` provenance, so the JSON should report a
+    // provenance object with kind="sig".
+    const link_result = try repo.runDrift(&.{ "link", "docs/spec.md", "src/main.ts" });
+    defer link_result.deinit(allocator);
+    try helpers.expectExitCode(link_result.term, 0);
+    try repo.commit("link spec");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 0);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const Payload = struct {
+        tool_version: []const u8,
+        checked_at_ms: i64,
+        summary: struct { verification_state: []const u8, specs_checked: u32 },
+        specs: []const struct {
+            anchors: []const struct {
+                provenance: ?struct { kind: []const u8, value: []const u8 },
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(Payload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expect(parsed.value.tool_version.len > 0);
+    try std.testing.expect(parsed.value.checked_at_ms > 0);
+    try std.testing.expectEqualStrings("full", parsed.value.summary.verification_state);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_checked);
+    try std.testing.expect(parsed.value.specs[0].anchors[0].provenance != null);
+    try std.testing.expectEqualStrings("sig", parsed.value.specs[0].anchors[0].provenance.?.kind);
+    try std.testing.expect(parsed.value.specs[0].anchors[0].provenance.?.value.len > 0);
+}
+
+test "check --format json populates blame on stale anchor" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeSpec("docs/spec.md", &.{"src/main.ts"}, "# Spec\n");
+    try repo.writeFile("src/main.ts", "export function main() {}\n");
+    try repo.commit("add spec and source");
+
+    try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
+    try repo.commit("refactor: tweak main return value");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 1);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const Payload = struct {
+        specs: []const struct {
+            anchors: []const struct {
+                blame: ?struct {
+                    author: []const u8,
+                    commit: []const u8,
+                    date: []const u8,
+                    subject: []const u8,
+                },
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(Payload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const blame = parsed.value.specs[0].anchors[0].blame orelse return error.MissingBlame;
+    try std.testing.expect(blame.author.len > 0);
+    try std.testing.expect(blame.commit.len >= 40); // full object id, not %h
+    try std.testing.expect(std.mem.indexOfScalar(u8, blame.date, 'T') != null); // ISO 8601 strict
+    try std.testing.expect(blame.date.len > 0);
+    try helpers.expectContains(blame.subject, "refactor: tweak main return value");
+}
+
+test "check --format json reports skip with origin_mismatch and verification_state none" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    // Hand-write a spec with a foreign origin so origin-mismatch fires.
+    try repo.writeFile(
+        "docs/spec.md",
+        "---\ndrift:\n  origin: github:other/repo\n  files:\n    - src/main.ts\n---\n# Spec\n",
+    );
+    try repo.writeFile("src/main.ts", "export function main() {}\n");
+    try repo.commit("add foreign-origin spec");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 0); // skip is not a failure
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const Payload = struct {
+        summary: struct {
+            result: []const u8,
+            verification_state: []const u8,
+            specs_total: u32,
+            specs_checked: u32,
+            specs_skipped: u32,
+            anchors_skipped: u32,
+        },
+        specs: []const struct {
+            result: []const u8,
+            anchors: []const struct {
+                result: []const u8,
+                reason: ?struct { code: []const u8 },
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(Payload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("pass", parsed.value.summary.result);
+    try std.testing.expectEqualStrings("none", parsed.value.summary.verification_state);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_total);
+    try std.testing.expectEqual(@as(u32, 0), parsed.value.summary.specs_checked);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_skipped);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.anchors_skipped);
+    try std.testing.expectEqualStrings("skip", parsed.value.specs[0].result);
+    try std.testing.expectEqualStrings("skip", parsed.value.specs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("origin_mismatch", parsed.value.specs[0].anchors[0].reason.?.code);
+}
+
+test "check --format json reports verification_state partial when one spec skips and one checks" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeSpec("docs/ok.md", &.{"src/ok.ts"}, "# Ok\n");
+    try repo.writeFile("src/ok.ts", "export const x = 1;\n");
+
+    try repo.writeFile(
+        "docs/skip.md",
+        "---\ndrift:\n  origin: github:other/repo\n  files:\n    - src/skip.ts\n---\n# Skip\n",
+    );
+    try repo.writeFile("src/skip.ts", "export const y = 2;\n");
+
+    try repo.commit("two specs: one local, one foreign origin");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 0);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const Payload = struct {
+        summary: struct {
+            verification_state: []const u8,
+            specs_total: u32,
+            specs_checked: u32,
+            specs_skipped: u32,
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(Payload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("partial", parsed.value.summary.verification_state);
+    try std.testing.expectEqual(@as(u32, 2), parsed.value.summary.specs_total);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_checked);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_skipped);
+}
+
+test "check --format rejects unknown values" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeSpec("docs/spec.md", &.{}, "# Empty\n");
+    try repo.commit("add empty spec");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "yaml" });
+    defer result.deinit(allocator);
+
+    // Should NOT exit 0 — unknown format must be a hard error, not silent text fallthrough.
+    try std.testing.expect(result.exitCode() != 0);
+    try helpers.expectContains(result.stderr, "unknown --format");
+}
+
+test "lint --format json works as alias" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeSpec("docs/spec.md", &.{}, "# Spec\n");
+    try repo.commit("add empty spec");
+
+    const result = try repo.runDrift(&.{ "lint", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 0);
+
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    try helpers.expectContains(result.stdout, "drift.check.v1");
+}
+
 test "lint succeeds in repos with many tracked files (>50KB ls-files output)" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);

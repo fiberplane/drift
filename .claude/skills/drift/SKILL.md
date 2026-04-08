@@ -4,10 +4,10 @@ description: Drift spec-to-code anchor conventions. Use when editing code that i
 drift:
   origin: github:fiberplane/drift
   files:
-    - src/main.zig@sig:1f0ab611cebf2ea0
+    - src/main.zig@sig:3560999bb08f8512
     - src/frontmatter.zig@sig:ef9880e4f1a96c16
     - src/scanner.zig@sig:9ccfb8091a6c8ef2
-    - src/vcs.zig@sig:af1279e1afd6b10d
+    - src/vcs.zig@sig:b9481e9cf295501a
 ---
 
 # Drift
@@ -128,7 +128,9 @@ drift:
 
 ## Staleness
 
-`drift check` exits 1 if any anchor is stale. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won't trigger staleness. Stale reports include git blame info (author, commit, message) so you know what changed and why.
+`drift check` exits 1 if any anchor is stale. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won't trigger staleness. Stale reports include git blame–style context (who last touched the line of interest, which commit, subject) so you can see what changed.
+
+For `--format json`, the payload is `schema_version: drift.check.v1` (see the repo’s `docs/check-json-schema.md`). There, `blame.date` is the **committer** date in ISO 8601 strict form, not author date — use it when you need a stable time ordering after rebases. The summary includes `verification_state` (`none` | `partial` | `full`) describing how many specs were actually checked versus skipped (e.g. origin mismatch).
 
 Reasons:
 - **changed after spec** — file/symbol content differs from provenance snapshot

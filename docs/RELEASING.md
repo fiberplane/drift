@@ -2,7 +2,7 @@
 drift:
   files:
     - .github/workflows/release.yml@sig:9df2a52053527e17
-    - .github/workflows/ci.yml@sig:ee83b1222f33444e
+    - .github/workflows/ci.yml@sig:e8440b1d7ee3e4ba
     - cliff.toml@sig:d2a8e301fe4b788e
 ---
 
@@ -12,7 +12,11 @@ Source of truth: `.github/workflows/release.yml`, `.github/workflows/ci.yml`, `c
 
 ## CI
 
-Every push to `main` and every pull request runs the CI workflow (`.github/workflows/ci.yml`). It builds drift, runs `drift lint`, then cross-compiles for all 4 targets (aarch64-macos, x86_64-macos, x86_64-linux, aarch64-linux). Build depends on lint passing.
+Every push to `main` and every pull request runs the CI workflow (`.github/workflows/ci.yml`).
+
+The **lint** job: install Zig 0.15.2, build the project, run the full test suite (`zig build test -Doptimize=ReleaseSafe`), regenerate `docs/schemas/drift.check.v1.json` from the payload types and fail if that file differs from what is committed (`zig build gen-check-schema` plus `git diff --exit-code`), then run `./zig-out/bin/drift lint` so the repo’s own drift specs stay current. If any step fails, the job fails.
+
+The **build** job runs after **lint** and cross-compiles release binaries for all four targets (aarch64-macos, x86_64-macos, x86_64-linux, aarch64-linux), packaging each as a tarball artifact.
 
 ## Releasing a version
 
