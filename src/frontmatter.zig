@@ -599,6 +599,88 @@ pub fn relinkAllAnchors(
     return intermediate;
 }
 
+fn emitFrontmatterWithoutDrift(
+    allocator: std.mem.Allocator,
+    split: *const FrontmatterSplit,
+    body_start: usize,
+    content: []const u8,
+) ![]const u8 {
+    var output: std.ArrayList(u8) = .{};
+    errdefer output.deinit(allocator);
+    const writer = output.writer(allocator);
+
+    if (split.before.items.len > 0 or split.after.items.len > 0) {
+        try writer.writeAll("---\n");
+        for (split.before.items) |line| {
+            try writer.writeAll(line);
+            try writer.writeByte('\n');
+        }
+        for (split.after.items) |line| {
+            try writer.writeAll(line);
+            try writer.writeByte('\n');
+        }
+        try writer.writeAll("---\n");
+    }
+
+    if (body_start <= content.len) {
+        try writer.writeAll(content[body_start..]);
+    }
+    return try output.toOwnedSlice(allocator);
+}
+
+fn stripCommentAnchors(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
+    const marker = markdown.drift_html_comment_prefix;
+
+    var output: std.ArrayList(u8) = .{};
+    errdefer output.deinit(allocator);
+    const writer = output.writer(allocator);
+
+    var pos: usize = 0;
+    while (markdown.nextDriftCommentMarker(content, pos)) |abs_marker_pos| {
+        try writer.writeAll(content[pos..abs_marker_pos]);
+
+        const block_start = abs_marker_pos + marker.len;
+        const close_offset = std.mem.indexOf(u8, content[block_start..], "-->") orelse {
+            try writer.writeAll(content[abs_marker_pos..]);
+            return try output.toOwnedSlice(allocator);
+        };
+        pos = block_start + close_offset + 3;
+        if (pos < content.len and content[pos] == '\n') pos += 1;
+    }
+
+    try writer.writeAll(content[pos..]);
+    return try output.toOwnedSlice(allocator);
+}
+
+/// Remove legacy embedded drift metadata from a spec while preserving its markdown body.
+/// This strips YAML `drift:` frontmatter blocks and `<!-- drift: ... -->` comment blocks.
+pub fn stripLegacyDriftMetadata(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
+    var intermediate: []const u8 = blk: {
+        const bounds = markdown.yamlFrontmatterInnerAndBody(content) orelse {
+            break :blk try allocator.dupe(u8, content);
+        };
+        const fm = bounds.inner;
+        const body_start = bounds.body_start;
+
+        var split = try parseFrontmatterSplit(allocator, fm);
+        defer split.deinit(allocator);
+
+        if (!split.has_drift) {
+            break :blk try allocator.dupe(u8, content);
+        }
+
+        break :blk try emitFrontmatterWithoutDrift(allocator, &split, body_start, content);
+    };
+
+    if (hasCommentAnchors(intermediate)) {
+        const stripped = try stripCommentAnchors(allocator, intermediate);
+        allocator.free(intermediate);
+        intermediate = stripped;
+    }
+
+    return intermediate;
+}
+
 pub const UnlinkResult = struct {
     content: []const u8,
     removed: bool,

@@ -1,8 +1,7 @@
 const std = @import("std");
 const frontmatter = @import("../frontmatter.zig");
-const scanner = @import("../scanner.zig");
+const lockfile = @import("../lockfile.zig");
 const symbols = @import("../symbols.zig");
-const vcs = @import("../vcs.zig");
 
 pub fn run(
     allocator: std.mem.Allocator,
@@ -17,151 +16,240 @@ pub fn run(
     };
     defer allocator.free(cwd_path);
 
-    const detected_vcs = vcs.detectVcs();
-    const auto_change_id = vcs.getCurrentChangeId(allocator, cwd_path, detected_vcs) catch null;
-    defer if (auto_change_id) |cid| allocator.free(cid);
+    var lf = try lockfile.discover(allocator, cwd_path);
+    defer lf.deinit(allocator);
 
-    const cwd = std.fs.cwd();
-    const content = cwd.readFileAlloc(allocator, spec_path, 1024 * 1024) catch |err| {
+    const content = std.fs.cwd().readFileAlloc(allocator, spec_path, 1024 * 1024) catch |err| {
         stderr_w.print("cannot read {s}: {s}\n", .{ spec_path, @errorName(err) }) catch {};
         return err;
     };
     defer allocator.free(content);
 
+    const normalized_spec_path = try normalizeSpecPath(allocator, lf.root_path, cwd_path, spec_path);
+    defer allocator.free(normalized_spec_path);
+
+    const parsed_legacy = frontmatter.parseDriftSpec(allocator, content);
+    defer if (parsed_legacy) |legacy| {
+        var owned = legacy;
+        for (owned.anchors.items) |anchor| allocator.free(anchor);
+        owned.anchors.deinit(allocator);
+        if (owned.origin) |origin| allocator.free(origin);
+    };
+
+    if (parsed_legacy) |legacy| {
+        try migrateLegacyBindings(allocator, &lf, cwd_path, normalized_spec_path, legacy.anchors.items, legacy.origin);
+    }
+
     if (optional_anchor) |raw_anchor| {
-        try linkTargeted(allocator, stdout_w, stderr_w, spec_path, raw_anchor, content, auto_change_id);
-    } else {
-        try linkBlanket(allocator, stdout_w, stderr_w, spec_path, content, auto_change_id);
+        const normalized_target = try normalizeTargetPath(allocator, lf.root_path, cwd_path, raw_anchor);
+        defer allocator.free(normalized_target);
+
+        try upsertBinding(allocator, &lf, cwd_path, normalized_spec_path, normalized_target, if (parsed_legacy) |legacy| legacy.origin else null);
+        try lockfile.writeFile(&lf, allocator);
+
+        if (parsed_legacy != null) {
+            try stripLegacySpecFile(allocator, spec_path, content, stderr_w);
+        }
+
+        const binding = findBinding(lf.bindings.items, normalized_spec_path, normalized_target).?;
+        stdout_w.print("added {s} -> {s}", .{ normalized_spec_path, binding.target }) catch {};
+        if (binding.fieldValue("sig")) |sig| {
+            stdout_w.print(" sig:{s}", .{sig}) catch {};
+        }
+        stdout_w.print("\n", .{}) catch {};
+        return;
+    }
+
+    var relinked_any = false;
+    for (lf.bindings.items) |*binding| {
+        if (!std.mem.eql(u8, binding.spec_path, normalized_spec_path)) continue;
+        try refreshBindingSig(allocator, cwd_path, lf.root_path, binding);
+        relinked_any = true;
+    }
+
+    if (!relinked_any and parsed_legacy == null) {
+        stderr_w.print("no bindings found for {s}\n", .{normalized_spec_path}) catch {};
+        return error.NoBindingsForSpec;
+    }
+
+    try lockfile.writeFile(&lf, allocator);
+
+    if (parsed_legacy != null) {
+        try stripLegacySpecFile(allocator, spec_path, content, stderr_w);
+    }
+
+    stdout_w.print("relinked all anchors in {s}\n", .{normalized_spec_path}) catch {};
+}
+
+fn migrateLegacyBindings(
+    allocator: std.mem.Allocator,
+    lf: *lockfile.Lockfile,
+    cwd_path: []const u8,
+    normalized_spec_path: []const u8,
+    legacy_anchors: []const []const u8,
+    origin: ?[]const u8,
+) !void {
+    for (legacy_anchors) |legacy_anchor| {
+        const normalized_target = try normalizeTargetPath(allocator, lf.root_path, cwd_path, legacy_anchor);
+        defer allocator.free(normalized_target);
+        try upsertBinding(allocator, lf, cwd_path, normalized_spec_path, normalized_target, origin);
     }
 }
 
-fn linkTargeted(
+fn upsertBinding(
     allocator: std.mem.Allocator,
-    stdout_w: *std.io.Writer,
-    stderr_w: *std.io.Writer,
-    spec_path: []const u8,
-    raw_anchor: []const u8,
-    content: []const u8,
-    auto_change_id: ?[]const u8,
+    lf: *lockfile.Lockfile,
+    cwd_path: []const u8,
+    normalized_spec_path: []const u8,
+    normalized_target: []const u8,
+    origin: ?[]const u8,
 ) !void {
-    const anchor = blk: {
-        const identity = frontmatter.anchorFileIdentity(raw_anchor);
-        if (identity.len != raw_anchor.len) {
-            break :blk raw_anchor;
+    if (findBinding(lf.bindings.items, normalized_spec_path, normalized_target)) |binding| {
+        try refreshBindingSig(allocator, cwd_path, lf.root_path, binding);
+        if (origin) |o| {
+            try binding.setField(allocator, "origin", o);
         }
-        const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-        const target_file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-        const target_symbol = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+        return;
+    }
 
-        if (symbols.computeContentSig(allocator, target_file_path, target_symbol)) |sig| {
-            defer allocator.free(sig);
-            break :blk std.fmt.allocPrint(allocator, "{s}@{s}", .{ raw_anchor, sig }) catch break :blk raw_anchor;
-        }
-        if (auto_change_id) |cid| {
-            break :blk std.fmt.allocPrint(allocator, "{s}@{s}", .{ raw_anchor, cid }) catch break :blk raw_anchor;
-        }
-        break :blk raw_anchor;
+    var binding = lockfile.Binding{
+        .spec_path = try allocator.dupe(u8, normalized_spec_path),
+        .target = try allocator.dupe(u8, normalized_target),
+        .metadata = .{},
     };
-    const anchor_owned = anchor.ptr != raw_anchor.ptr;
-    defer if (anchor_owned) allocator.free(anchor);
+    errdefer binding.deinit(allocator);
 
-    const after_frontmatter = try frontmatter.linkAnchor(allocator, content, anchor);
-    defer allocator.free(after_frontmatter);
+    try refreshBindingSig(allocator, cwd_path, lf.root_path, &binding);
+    if (origin) |o| {
+        try binding.setField(allocator, "origin", o);
+    }
 
-    const target_file = frontmatter.anchorFileIdentity(raw_anchor);
-    const target_hash_pos = std.mem.indexOfScalar(u8, target_file, '#');
-    const target_path = if (target_hash_pos) |pos| target_file[0..pos] else target_file;
+    try lf.bindings.append(allocator, binding);
+}
 
-    const anchor_identity = frontmatter.anchorFileIdentity(anchor);
-    const inline_provenance = if (anchor_identity.len < anchor.len) anchor[anchor_identity.len + 1 ..] else if (auto_change_id) |cid| cid else "unknown";
-    const final_result = try scanner.updateInlineAnchors(allocator, after_frontmatter, target_path, inline_provenance);
-    defer allocator.free(final_result);
+fn refreshBindingSig(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    root_path: []const u8,
+    binding: *lockfile.Binding,
+) !void {
+    const sig = try computeTargetSig(allocator, cwd_path, root_path, binding.target);
+    defer allocator.free(sig);
+    try binding.setField(allocator, "sig", sig["sig:".len..]);
+}
 
-    const file = std.fs.cwd().openFile(spec_path, .{ .mode = .write_only }) catch |err| {
+fn computeTargetSig(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    root_path: []const u8,
+    target: []const u8,
+) ![]const u8 {
+    const identity = frontmatter.anchorFileIdentity(target);
+    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
+    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
+    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+
+    const absolute_path = try resolveInputPath(allocator, root_path, cwd_path, file_part);
+    defer allocator.free(absolute_path);
+
+    const content = try readResolvedFile(allocator, absolute_path);
+    defer allocator.free(content);
+
+    return symbols.computeContentSigFromSource(allocator, content, file_part, symbol_name) orelse error.CannotComputeFingerprint;
+}
+
+fn stripLegacySpecFile(
+    allocator: std.mem.Allocator,
+    spec_path: []const u8,
+    content: []const u8,
+    stderr_w: *std.io.Writer,
+) !void {
+    const stripped = try frontmatter.stripLegacyDriftMetadata(allocator, content);
+    defer allocator.free(stripped);
+
+    const file = std.fs.cwd().createFile(spec_path, .{ .truncate = true }) catch |err| {
         stderr_w.print("cannot write {s}: {s}\n", .{ spec_path, @errorName(err) }) catch {};
         return err;
     };
     defer file.close();
-
-    try file.writeAll(final_result);
-    try file.setEndPos(final_result.len);
-
-    stdout_w.print("added {s} to {s}\n", .{ anchor, spec_path }) catch {};
+    try file.writeAll(stripped);
 }
 
-fn linkBlanket(
+fn normalizeSpecPath(
     allocator: std.mem.Allocator,
-    stdout_w: *std.io.Writer,
-    stderr_w: *std.io.Writer,
+    root_path: []const u8,
+    cwd_path: []const u8,
     spec_path: []const u8,
-    content: []const u8,
-    auto_change_id: ?[]const u8,
-) !void {
-    const parsed_spec = frontmatter.parseDriftSpec(allocator, content);
-    defer if (parsed_spec) |*ps| {
-        var a = ps.anchors;
-        for (a.items) |b| allocator.free(b);
-        a.deinit(allocator);
-        if (ps.origin) |o| allocator.free(o);
-    };
+) ![]const u8 {
+    const absolute = try resolveInputPath(allocator, root_path, cwd_path, spec_path);
+    defer allocator.free(absolute);
+    return try std.fs.path.relative(allocator, root_path, absolute);
+}
 
-    var intermediate: []const u8 = try allocator.dupe(u8, content);
+fn normalizeTargetPath(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    raw_target: []const u8,
+) ![]const u8 {
+    const identity = frontmatter.anchorFileIdentity(raw_target);
+    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
+    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
+    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
 
-    if (parsed_spec) |drift_spec| {
-        for (drift_spec.anchors.items) |existing_anchor| {
-            const identity = frontmatter.anchorFileIdentity(existing_anchor);
-            const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-            const anchor_file_path = if (hash_pos) |pos| identity[0..pos] else identity;
-            const anchor_symbol = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+    const absolute = try resolveInputPath(allocator, root_path, cwd_path, file_part);
+    defer allocator.free(absolute);
 
-            const sig = symbols.computeContentSig(allocator, anchor_file_path, anchor_symbol);
-            defer if (sig) |s| allocator.free(s);
+    const relative = try std.fs.path.relative(allocator, root_path, absolute);
+    errdefer allocator.free(relative);
 
-            const provenance = sig orelse (auto_change_id orelse continue);
-            const new_anchor = std.fmt.allocPrint(allocator, "{s}@{s}", .{ identity, provenance }) catch continue;
-            defer allocator.free(new_anchor);
+    if (symbol_name) |symbol| {
+        return try std.fmt.allocPrint(allocator, "{s}#{s}", .{ relative, symbol });
+    }
+    return relative;
+}
 
-            const updated = frontmatter.linkAnchor(allocator, intermediate, new_anchor) catch continue;
-            allocator.free(intermediate);
-            intermediate = updated;
+fn resolveInputPath(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    path: []const u8,
+) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return try allocator.dupe(u8, path);
+    }
+
+    const cwd_candidate = try std.fs.path.resolve(allocator, &.{ cwd_path, path });
+    errdefer allocator.free(cwd_candidate);
+    if (pathExists(cwd_candidate)) return cwd_candidate;
+    allocator.free(cwd_candidate);
+
+    return try std.fs.path.resolve(allocator, &.{ root_path, path });
+}
+
+fn pathExists(path: []const u8) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        std.fs.accessAbsolute(path, .{}) catch return false;
+        return true;
+    }
+    std.fs.cwd().access(path, .{}) catch return false;
+    return true;
+}
+
+fn readResolvedFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        const file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+        return try file.readToEndAlloc(allocator, 1024 * 1024);
+    }
+    return try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+}
+
+fn findBinding(bindings: []lockfile.Binding, spec_path: []const u8, target: []const u8) ?*lockfile.Binding {
+    for (bindings) |*binding| {
+        if (std.mem.eql(u8, binding.spec_path, spec_path) and std.mem.eql(u8, binding.target, target)) {
+            return binding;
         }
     }
-
-    const body_content = intermediate;
-    var inline_anchors = scanner.parseInlineAnchors(allocator, body_content);
-    defer {
-        for (inline_anchors.items) |a| allocator.free(a);
-        inline_anchors.deinit(allocator);
-    }
-
-    var after_inline: []const u8 = try allocator.dupe(u8, intermediate);
-    allocator.free(intermediate);
-
-    for (inline_anchors.items) |inline_anchor| {
-        const inline_identity = frontmatter.anchorFileIdentity(inline_anchor);
-        const inline_hash_pos = std.mem.indexOfScalar(u8, inline_identity, '#');
-        const inline_file_path = if (inline_hash_pos) |pos| inline_identity[0..pos] else inline_identity;
-        const inline_symbol = if (inline_hash_pos) |pos| inline_identity[pos + 1 ..] else null;
-
-        const inline_sig = symbols.computeContentSig(allocator, inline_file_path, inline_symbol);
-        defer if (inline_sig) |s| allocator.free(s);
-
-        const inline_provenance = inline_sig orelse (auto_change_id orelse continue);
-        const updated_inline = scanner.updateInlineAnchors(allocator, after_inline, inline_file_path, inline_provenance) catch continue;
-        allocator.free(after_inline);
-        after_inline = updated_inline;
-    }
-
-    const file = std.fs.cwd().openFile(spec_path, .{ .mode = .write_only }) catch |err| {
-        stderr_w.print("cannot write {s}: {s}\n", .{ spec_path, @errorName(err) }) catch {};
-        allocator.free(after_inline);
-        return err;
-    };
-    defer file.close();
-
-    try file.writeAll(after_inline);
-    try file.setEndPos(after_inline.len);
-    allocator.free(after_inline);
-
-    stdout_w.print("relinked all anchors in {s}\n", .{spec_path}) catch {};
+    return null;
 }

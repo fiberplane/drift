@@ -253,14 +253,24 @@ pub fn computeFingerprint(content: []const u8, file_path: []const u8, symbol_nam
     return hasher.final();
 }
 
+/// Compute a `sig:<hex>` string from already-loaded source content.
+pub fn computeContentSigFromSource(
+    allocator: std.mem.Allocator,
+    content: []const u8,
+    file_path: []const u8,
+    symbol_name: ?[]const u8,
+) ?[]const u8 {
+    const fingerprint = computeFingerprint(content, file_path, symbol_name) orelse return null;
+    return std.fmt.allocPrint(allocator, "sig:{x:0>16}", .{fingerprint}) catch return null;
+}
+
 /// Read a file from disk, compute its fingerprint, and return a `sig:<hex>` string.
 /// Returns null if the file can't be read or the fingerprint can't be computed.
 pub fn computeContentSig(allocator: std.mem.Allocator, file_path: []const u8, symbol_name: ?[]const u8) ?[]const u8 {
     const content = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch return null;
     defer allocator.free(content);
 
-    const fingerprint = computeFingerprint(content, file_path, symbol_name) orelse return null;
-    return std.fmt.allocPrint(allocator, "sig:{x:0>16}", .{fingerprint}) catch return null;
+    return computeContentSigFromSource(allocator, content, file_path, symbol_name);
 }
 
 test "fingerprintFileSyntaxCached works for zig source" {

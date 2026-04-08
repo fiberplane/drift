@@ -163,13 +163,9 @@ pub fn writeFile(lockfile: *const Lockfile, allocator: std.mem.Allocator) !void 
     const content = try serialize(allocator, lockfile.bindings.items);
     defer allocator.free(content);
 
-    if (std.fs.path.dirname(lockfile.lockfile_path)) |parent| {
-        try std.fs.cwd().makePath(parent);
-    }
-    try std.fs.cwd().writeFile(.{
-        .sub_path = lockfile.lockfile_path,
-        .data = content,
-    });
+    const file = try createPath(lockfile.lockfile_path);
+    defer file.close();
+    try file.writeAll(content);
 }
 
 fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
@@ -227,6 +223,13 @@ fn openPath(path: []const u8) !std.fs.File {
         return std.fs.openFileAbsolute(path, .{});
     }
     return std.fs.cwd().openFile(path, .{});
+}
+
+fn createPath(path: []const u8) !std.fs.File {
+    if (std.fs.path.isAbsolute(path)) {
+        return std.fs.createFileAbsolute(path, .{ .truncate = true });
+    }
+    return std.fs.cwd().createFile(path, .{ .truncate = true });
 }
 
 fn parentPath(path: []const u8) ?[]const u8 {
