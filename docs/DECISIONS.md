@@ -1,11 +1,3 @@
----
-drift:
-  files:
-    - src/main.zig@sig:3560999bb08f8512
-    - src/symbols.zig@sig:1f41e745e5e32c2d
-    - src/vcs.zig@sig:b9481e9cf295501a
----
-
 # Decisions
 
 ## 1. Zig over TypeScript
@@ -18,30 +10,33 @@ The previous drift implementation was TypeScript/Bun with the Effect ecosystem. 
 
 ## 2. On-demand parsing, no persistent index
 
-drift knows exactly which files it cares about — they're declared in spec frontmatter, `<!-- drift: ... -->` comments, and `@./` inline references. It parses only those files, only when checking them. A lint run that touches 20 files does 20 tree-sitter parses. No persistent index, no disk cache, no invalidation logic.
+drift knows exactly which files it cares about — they're declared in `drift.lock`. It parses only those files, only when checking them. A lint run that touches 20 files does 20 tree-sitter parses. No persistent index, no disk cache, no invalidation logic.
 
-Within a single lint run, file content and historical versions are cached in memory (`FileCache`) and VCS queries use a persistent `git cat-file --batch` subprocess (`GitCatFile`). These are per-run optimizations — nothing is written to disk. Every `drift lint` run starts clean, reads specs, resolves anchors, queries VCS, reports. Nothing to get stale except the specs themselves.
+Within a single lint run, file content is cached in memory (`FileCache`) and VCS queries use a persistent `git cat-file --batch` subprocess (`GitCatFile`). These are per-run optimizations — nothing is written to disk. Every `drift lint` run starts clean, reads the lockfile, resolves anchors, queries VCS, reports. Nothing to get stale except the specs themselves.
 
-## 3. Unified anchor syntax with inline provenance
+## 3. Lockfile over embedded anchors
 
-Anchors and provenance live together in the spec file using the `file@change` syntax, not in separate `files:` and `changes:` lists. Each anchor carries its own provenance as an `@change` suffix (e.g. `src/auth/login.ts@sig:a1b2c3d4e5f6a7b8`). Anchors can appear in YAML frontmatter or in `<!-- drift: ... -->` HTML comments (for specs where visible frontmatter is undesirable). The spec file is self-contained — its anchors, dependencies, and provenance are all in one place.
+Anchors moved from spec frontmatter and HTML comments to `drift.lock` at the repo root. The original design embedded anchors directly in spec files — YAML frontmatter, `<!-- drift: ... -->` comments, and `@./path` inline references. The reasoning was sound for checking (scanning is fast, the number of specs is small, specs are self-contained), but it didn't account for reverse lookups and clean rendering.
 
-This design means provenance is per-anchor rather than per-spec. When an agent updates code for one anchor, it stamps just that anchor's change reference without affecting others. A spec with three anchors can have two fresh and one stale, and the `@change` suffix makes it immediately visible which anchors have been addressed.
+Embedded anchors have structural limitations:
+- **No reverse lookup** — answering "which specs reference this file?" requires parsing every spec. A lockfile is a flat index that works in both directions.
+- **Scoped checking is expensive** — `drift check --changed <path>` needs to find affected specs without parsing all markdown files. The lockfile makes this a line filter.
+- **Rendering noise** — frontmatter and HTML comments are visible in some renderers and invisible in others. Specs with drift metadata don't render as clean markdown everywhere.
+- **File renames** — renaming a target file means editing every spec that references it. With a lockfile, one entry changes per binding.
 
-`drift link` edits the spec file directly. The anchor is visible to anyone reading the spec. The VCS tracks when anchors were added or removed as part of the spec's history.
+The tradeoff is that specs are no longer self-contained — the lockfile must travel with the repo. This is acceptable because drift is a repo-level tool. The lockfile is checked into version control alongside the specs and code it binds together.
 
-The alternative (a central evidence file) enables querying "which specs bind to this file?" without scanning all specs. We chose scanning because: the number of spec files is small (tens, not thousands), scanning is fast (just frontmatter parsing, no tree-sitter), and self-contained specs are easier to reason about.
+## 4. Content signatures in lockfile
 
-## 4. VCS-based staleness, no lockfile
+`drift link` stores provenance as `sig:<16-char-hex>` — a content-addressed fingerprint of the anchor's target. The fingerprint is the same normalized syntax hash that staleness detection computes (XxHash3 of the tree-sitter AST walk, or raw XxHash3 for unsupported languages).
 
-Staleness is detected by comparing the current code against the bound code at a baseline revision in VCS. For supported tree-sitter languages, drift compares normalized syntax fingerprints so formatting-only changes don't trigger drift; unsupported files fall back to raw content comparison. This requires no stored state beyond what the VCS already tracks.
+The original design (Decision 4 in prior versions) rejected lockfiles on the grounds that they introduce an escape hatch — `drift lock` could silence lint warnings without updating the spec. This concern doesn't apply to the current design because:
 
-We considered a lockfile (stored content hashes per anchor). A lockfile would enable offline staleness detection and wouldn't depend on VCS history ordering. We rejected it because:
-
-- It introduces an escape hatch: `drift lock` could silence lint warnings without updating the spec
-- It's redundant state that can itself drift from reality
-- VCS history is reliable for the common rebase/merge patterns developers actually use
-- The one edge case (interactive rebase reordering unrelated commits) produces safe false positives, not dangerous false negatives
+- The lockfile stores signatures, not "this is fine" flags. A stale signature still reports as stale. There is no way to mark an anchor as "accepted" — the only way to make it pass is to run `drift link`, which recomputes the signature from current code.
+- The lockfile is deterministically generated by `drift link` — it's not a manual override mechanism.
+- Content signatures make drift VCS-independent. `drift lint` with `sig:` never shells out to git for staleness — it reads the file, hashes it, compares. This makes shallow clones, fresh clones, and detached-HEAD states work without history.
+- Detached HEAD, rebases, and force pushes don't invalidate provenance. A git SHA can become unreachable; a content fingerprint is always recomputable from the current file.
+- The staleness check is a pure function of the file's content, not of VCS state. Behavior is deterministic.
 
 ## 5. Symbol-level anchors via tree-sitter
 
@@ -61,17 +56,15 @@ File-level anchors remain the default. Symbol-level is opt-in for precision wher
 
 ## 6. Specs live anywhere, not in a special directory
 
-Early designs had specs in `.drift/nodes/`. The final design allows any markdown file in the repo to be a drift spec by adding `drift:` frontmatter or a `<!-- drift: ... -->` HTML comment.
+Early designs had specs in `.drift/nodes/`. The final design allows any markdown file in the repo to be a drift spec — it just needs an entry in `drift.lock`.
 
-This means existing documentation can be incrementally adopted. You don't move files into a special directory — you add frontmatter or a drift comment to docs you already have. The `.drift/` directory exists only for optional configuration.
-
-Discovery is by scanning — drift lists all git-tracked markdown files (via `git ls-files -z`) and checks each for drift markers. This is fast because it only needs to parse frontmatter and scan for comment markers.
+This means existing documentation can be incrementally adopted. You don't move files into a special directory — you run `drift link` to bind a doc to code. The `.drift/` directory exists only for optional configuration.
 
 ## 7. git and jj support, auto-detected
 
 drift shells out to git or jj rather than using a library. The VCS is auto-detected by checking for `.jj` (preferred) or `.git`.
 
-jj's stable change IDs are a better fit for provenance tracking (the `@change` suffix on anchors) because they survive rewrites. git SHAs may become unreachable after rebase, but staleness detection uses file-level VCS history queries, not stored SHAs, so this doesn't affect correctness.
+jj's stable change IDs are a better fit for provenance tracking because they survive rewrites. git SHAs may become unreachable after rebase, but content signatures (Decision 4) make this moot — staleness detection doesn't depend on VCS history.
 
 ## 8. Vendored tree-sitter core, grammars as build deps
 
@@ -81,22 +74,34 @@ Grammar C sources are NOT vendored. They're declared as lazy dependencies in `bu
 
 Starting with 6 languages: TypeScript, Python, Rust, Go, Zig, Java. More can be added by declaring the dependency and adding a `.scm` query file.
 
-## 9. Content signatures over VCS SHAs for provenance
+## 9. Content signatures as provenance format
 
-`drift link` now stores provenance as `@sig:<16-char-hex>` — a content-addressed fingerprint of the anchor's target — instead of `@<git-sha>`. The fingerprint is the same normalized syntax hash that staleness detection already computes (XxHash3 of the tree-sitter AST walk, or raw XxHash3 for unsupported languages).
-
-Content signatures solve several problems with VCS-based provenance:
-
-- Shallow clones and fresh clones work without history. `drift lint` with `@sig:` never shells out to git — it reads the file, hashes it, and compares. This makes CI faster and eliminates the `actions/checkout` depth footgun.
-- Detached HEAD, rebases, and force pushes don't invalidate provenance. A git SHA can become unreachable; a content fingerprint is always recomputable from the current file.
-- The staleness check is a pure function of the file's content, not of VCS state. This makes drift behavior deterministic and easier to reason about.
-
-Legacy `@<sha>` provenance is still supported — `drift lint` detects the format and routes to the VCS-based comparison path. Migration is incremental: running `drift link <spec>` on any spec rewrites its anchors to `@sig:` format.
+Content signatures (`sig:<16-char-hex>`) are the provenance format for all anchors. See Decision 4 for why they live in the lockfile and how they make drift VCS-independent for staleness detection.
 
 ## 10. Origin-qualified anchors
 
-Specs can declare `origin: github:owner/repo` in their `drift:` frontmatter section. At lint time, drift resolves the current repo's identity from `git remote get-url origin`, normalizes it to `github:owner/repo`, and compares. If a spec's origin doesn't match, its anchors are skipped — they belong to a different repository.
+Anchors can carry an `origin:github:owner/repo` field in the lockfile. At lint time, drift resolves the current repo's identity from `git remote get-url origin`, normalizes it to `github:owner/repo`, and compares. If an anchor's origin doesn't match, it is skipped — it belongs to a different repository.
 
-This solves the problem of specs traveling across repository boundaries. Shared skill files, vendored documentation, and monorepo imports all contain anchors that point at files in the source repo, not the consuming repo. Without origin qualification, `drift lint` would report these as STALE (file not found) every time, creating noise. With it, foreign specs are silently skipped and only local specs are checked.
+This solves the problem of specs traveling across repository boundaries. Shared skill files, vendored documentation, and monorepo imports all contain anchors that point at files in the source repo, not the consuming repo. Without origin qualification, `drift lint` would report these as STALE (file not found) every time, creating noise. With it, foreign anchors are silently skipped and only local anchors are checked.
 
-Origin is opt-in. Specs without `origin:` are always checked. The normalized format (`github:owner/repo`) is derived from the git remote URL, handling SSH, HTTPS, and SSH URL formats uniformly.
+Origin is opt-in. Anchors without `origin:` are always checked. The normalized format (`github:owner/repo`) is derived from the git remote URL, handling SSH, HTTPS, and SSH URL formats uniformly.
+
+## 11. Flat line-oriented lockfile format
+
+`drift.lock` uses a flat, line-oriented format where each line is one binding: `<spec> -> <target> <key:value>...`. Alternatives considered:
+
+- **YAML** — would require a YAML parser drift doesn't have. Adds a dependency for a config file format, not a data format.
+- **JSON** — noisy diffs (trailing commas, bracket lines), painful merge conflicts. JSON merge conflicts require understanding structure to resolve.
+- **INI-style sections** — grouping bindings under `[spec-path]` headers complicates conflict resolution because a conflict in the header affects all entries in the section.
+
+The flat format was chosen because:
+- Every line is independent — `sort -u` resolves merge conflicts mechanically.
+- No parser dependencies — `splitSequence(" -> ")` for the spec/rest boundary, `splitScalar(' ')` for target and key:value pairs.
+- Both paths on every line — grep works in both directions for quick shell queries (`grep 'src/auth' drift.lock` finds all bindings involving auth code).
+- Trailing key:value pairs extend naturally without format version bumps. New metadata fields (e.g. a future `hash-algo:`) are just another pair on the line.
+
+## 12. Lockfile discovery by walking up
+
+`drift.lock` is found by walking up from cwd, not by asking git for the repo root. This decouples drift from git for project root discovery — the same pattern as `Cargo.toml`, `package.json`, and `go.mod`. The lockfile itself becomes the project root marker.
+
+This matters because drift aims to support multiple VCS backends. Asking git for the repo root would hardcode git as the root-discovery mechanism even when running under jj or a future VCS. Walking up for `drift.lock` is VCS-agnostic and consistent with how most tools find their project root.
