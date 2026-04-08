@@ -28,8 +28,17 @@ const main_params = clap.parseParamsComptime(
     \\
 );
 
+var failed_command: []const u8 = "";
+
+fn parseCommand(in: []const u8) error{NameNotPartOfEnum}!SubCommand {
+    return std.meta.stringToEnum(SubCommand, in) orelse {
+        failed_command = in;
+        return error.NameNotPartOfEnum;
+    };
+}
+
 const main_parsers = .{
-    .command = clap.parsers.enumeration(SubCommand),
+    .command = parseCommand,
 };
 
 // Shared by `status`. Validation lives in `parseFormat` so an unknown value errors out
@@ -45,12 +54,11 @@ const check_params = clap.parseParamsComptime(
     \\
 );
 
-fn parseFormat(maybe_value: ?[]const u8, stderr_w: *std.Io.Writer) !lint.Format {
+fn parseFormat(maybe_value: ?[]const u8, stderr_w: *std.Io.Writer) lint.Format {
     const value = maybe_value orelse return .text;
     if (std.mem.eql(u8, value, "json")) return .json;
     if (std.mem.eql(u8, value, "text")) return .text;
-    stderr_w.print("error: unknown --format value '{s}' (expected 'text' or 'json')\n", .{value}) catch {};
-    return error.InvalidFormat;
+    fatal(stderr_w, "error: unknown --format value '{s}' (expected 'text' or 'json')\n", .{value});
 }
 
 const link_params = clap.parseParamsComptime(
@@ -84,14 +92,14 @@ fn parseExOrReport(
     stderr_w: *std.Io.Writer,
     iter: *std.process.ArgIterator,
     terminating_positional: usize,
-) !clap.ResultEx(clap.Help, params, value_parsers) {
+) clap.ResultEx(clap.Help, params, value_parsers) {
     return clap.parseEx(clap.Help, params, value_parsers, iter, .{
         .diagnostic = diag,
         .allocator = allocator,
         .terminating_positional = terminating_positional,
     }) catch |err| {
         diag.report(stderr_w, err) catch {};
-        return err;
+        fatal(stderr_w, "", .{});
     };
 }
 
@@ -112,7 +120,21 @@ pub fn main() !void {
     _ = iter.next(); // skip executable name
 
     var diag = clap.Diagnostic{};
-    var res = try parseExOrReport(&main_params, main_parsers, allocator, &diag, &stderr_w.interface, &iter, 0);
+    var res = clap.parseEx(clap.Help, &main_params, main_parsers, &iter, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+        .terminating_positional = 0,
+    }) catch |err| switch (err) {
+        error.NameNotPartOfEnum => {
+            stderr_w.interface.print("unknown command: '{s}'\n\n", .{failed_command}) catch {};
+            printUsage(&stderr_w.interface);
+            fatal(&stderr_w.interface, "", .{});
+        },
+        else => {
+            diag.report(&stderr_w.interface, err) catch {};
+            fatal(&stderr_w.interface, "", .{});
+        },
+    };
     defer res.deinit();
 
     if (res.args.help != 0) {
@@ -121,7 +143,9 @@ pub fn main() !void {
     }
 
     if (res.args.version != 0) {
-        stdout_w.interface.print("drift {s}\n", .{version}) catch return error.WriteFailed;
+        stdout_w.interface.print("drift {s}\n", .{version}) catch {
+            std.process.exit(1);
+        };
         return;
     }
 
@@ -132,20 +156,24 @@ pub fn main() !void {
 
     switch (command) {
         .check, .lint => {
-            var sub = try parseExOrReport(&check_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = parseExOrReport(&check_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift check [--format text|json] [--changed <path>]\n", .{}) catch {};
-                return error.InvalidArgument;
+                fatal(&stderr_w.interface, "usage: drift check [--format text|json] [--changed <path>]\n", .{});
             }
-            const format = try parseFormat(sub.args.format, &stderr_w.interface);
+            const format = parseFormat(sub.args.format, &stderr_w.interface);
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
             var scratch_arena = std.heap.ArenaAllocator.init(allocator);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            const run_status = lint.run(ctx, &stdout_w.interface, &stderr_w.interface, format, sub.args.changed) catch |err| {
-                exitWithCommandError(&stderr_w.interface, "check", err);
+            const run_status = lint.run(ctx, &stdout_w.interface, &stderr_w.interface, format, sub.args.changed) catch |err| switch (err) {
+                error.LintCheckFailed => {
+                    stdout_w.interface.flush() catch {};
+                    stderr_w.interface.flush() catch {};
+                    std.process.exit(1);
+                },
+                else => exitWithError(&stderr_w.interface, err),
             };
             // Exit-on-stale lives here (not in lint.run) so all `defer`s in run unwind
             // before the process dies. std.process.exit calls libc exit, which does not
@@ -157,57 +185,57 @@ pub fn main() !void {
             }
         },
         .status => {
-            var sub = try parseExOrReport(&format_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = parseExOrReport(&format_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift status [--format text|json]\n", .{}) catch {};
-                return error.InvalidArgument;
+                fatal(&stderr_w.interface, "usage: drift status [--format text|json]\n", .{});
             }
-            const format = try parseFormat(sub.args.format, &stderr_w.interface);
+            const format = parseFormat(sub.args.format, &stderr_w.interface);
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
             var scratch_arena = std.heap.ArenaAllocator.init(allocator);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             status.run(ctx, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
-                exitWithCommandError(&stderr_w.interface, "status", err);
+                exitWithError(&stderr_w.interface, err);
             };
         },
         .link => {
-            var sub = try parseExOrReport(&link_params, link_parsers, allocator, &diag, &stderr_w.interface, &iter, 0);
+            var sub = parseExOrReport(&link_params, link_parsers, allocator, &diag, &stderr_w.interface, &iter, 0);
             defer sub.deinit();
             const doc_path = sub.positionals[0] orelse {
-                stderr_w.interface.print("usage: drift link <doc-path> [anchor]\n", .{}) catch {};
-                return error.MissingArguments;
+                fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor]\n", .{});
             };
             const optional_anchor = iter.next();
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift link <doc-path> [anchor]\n", .{}) catch {};
-                return error.InvalidArgument;
+                fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor]\n", .{});
             }
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
             var scratch_arena = std.heap.ArenaAllocator.init(allocator);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| {
-                exitWithCommandError(&stderr_w.interface, "link", err);
+            link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| switch (err) {
+                error.DocReadFailed, error.DocWriteFailed, error.NoBindingsForDoc => {
+                    fatal(&stderr_w.interface, "", .{});
+                },
+                error.CannotComputeFingerprint => {
+                    fatal(&stderr_w.interface, "error: cannot compute fingerprint for anchor in '{s}'\n", .{doc_path});
+                },
+                else => exitWithError(&stderr_w.interface, err),
             };
         },
         .unlink => {
-            var sub = try parseExOrReport(&unlink_params, unlink_parsers, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = parseExOrReport(&unlink_params, unlink_parsers, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             const doc_path = sub.positionals[0] orelse {
-                stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
-                return error.MissingArguments;
+                fatal(&stderr_w.interface, "usage: drift unlink <doc-path> <anchor>\n", .{});
             };
             const anchor = sub.positionals[1] orelse {
-                stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
-                return error.MissingArguments;
+                fatal(&stderr_w.interface, "usage: drift unlink <doc-path> <anchor>\n", .{});
             };
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
-                return error.InvalidArgument;
+                fatal(&stderr_w.interface, "usage: drift unlink <doc-path> <anchor>\n", .{});
             }
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
@@ -215,17 +243,15 @@ pub fn main() !void {
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             unlink.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, anchor) catch |err| {
-                exitWithCommandError(&stderr_w.interface, "unlink", err);
+                exitWithError(&stderr_w.interface, err);
             };
         },
         .refs => {
             const target = iter.next() orelse {
-                stderr_w.interface.print("usage: drift refs <path>\n", .{}) catch {};
-                return error.MissingArguments;
+                fatal(&stderr_w.interface, "usage: drift refs <path>\n", .{});
             };
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift refs <path>\n", .{}) catch {};
-                return error.InvalidArgument;
+                fatal(&stderr_w.interface, "usage: drift refs <path>\n", .{});
             }
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
@@ -233,7 +259,7 @@ pub fn main() !void {
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             refs.run(ctx, &stdout_w.interface, &stderr_w.interface, target) catch |err| {
-                exitWithCommandError(&stderr_w.interface, "refs", err);
+                exitWithError(&stderr_w.interface, err);
             };
         },
         .help => printUsage(&stdout_w.interface),
@@ -262,8 +288,18 @@ fn printUsage(w: *std.io.Writer) void {
     , .{}) catch {};
 }
 
-fn exitWithCommandError(stderr_w: *std.io.Writer, command: []const u8, err: anyerror) noreturn {
-    stderr_w.print("{s} error: {s}\n", .{ command, @errorName(err) }) catch {};
+fn fatal(stderr_w: *std.io.Writer, comptime fmt: []const u8, args: anytype) noreturn {
+    stderr_w.print(fmt, args) catch {};
     stderr_w.flush() catch {};
     std.process.exit(1);
+}
+
+fn exitWithError(stderr_w: *std.io.Writer, err: anyerror) noreturn {
+    const message: []const u8 = switch (err) {
+        error.InvalidBindingLine => "malformed binding in drift.lock",
+        error.InvalidMetadataField => "malformed metadata field in drift.lock",
+        error.OutOfMemory => "out of memory",
+        else => @errorName(err),
+    };
+    fatal(stderr_w, "error: {s}\n", .{message});
 }

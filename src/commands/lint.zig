@@ -8,6 +8,7 @@ const vcs = @import("../vcs.zig");
 
 pub const Format = enum { text, json };
 pub const RunStatus = enum { pass, stale };
+pub const RunError = error{LintCheckFailed};
 
 /// Map from absolute path → current working-tree file bytes for one `lint` / `check` run.
 ///

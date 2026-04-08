@@ -4,6 +4,8 @@ const frontmatter = @import("../frontmatter.zig");
 const lockfile = @import("../lockfile.zig");
 const symbols = @import("../symbols.zig");
 
+pub const RunError = error{ DocReadFailed, DocWriteFailed, NoBindingsForDoc, CannotComputeFingerprint };
+
 pub fn run(
     ctx: CommandContext,
     stdout_w: *std.io.Writer,
@@ -17,8 +19,8 @@ pub fn run(
     ctx.resetScratch();
 
     const content = std.fs.cwd().readFileAlloc(ctx.run_arena, doc_path, 1024 * 1024) catch |err| {
-        stderr_w.print("cannot read {s}: {s}\n", .{ doc_path, @errorName(err) }) catch {};
-        return err;
+        stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
+        return error.DocReadFailed;
     };
 
     ctx.resetScratch();
@@ -161,8 +163,8 @@ fn stripLegacySpecFile(
     const stripped = try frontmatter.stripLegacyDriftMetadata(ctx.run_arena, content);
 
     const file = std.fs.cwd().createFile(doc_path, .{ .truncate = true }) catch |err| {
-        stderr_w.print("cannot write {s}: {s}\n", .{ doc_path, @errorName(err) }) catch {};
-        return err;
+        stderr_w.print("error: cannot write '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
+        return error.DocWriteFailed;
     };
     defer file.close();
     try file.writeAll(stripped);
