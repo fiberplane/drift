@@ -2,6 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const clap = @import("clap");
 
+const CommandContext = @import("context.zig").CommandContext;
 const lint = @import("commands/lint.zig");
 const status = @import("commands/status.zig");
 const link = @import("commands/link.zig");
@@ -138,7 +139,12 @@ pub fn main() !void {
                 return error.InvalidArgument;
             }
             const format = try parseFormat(sub.args.format, &stderr_w.interface);
-            const run_status = lint.run(allocator, &stdout_w.interface, &stderr_w.interface, format, sub.args.changed) catch |err| {
+            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            defer run_arena.deinit();
+            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            defer scratch_arena.deinit();
+            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            const run_status = lint.run(ctx, &stdout_w.interface, &stderr_w.interface, format, sub.args.changed) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "check", err);
             };
             // Exit-on-stale lives here (not in lint.run) so all `defer`s in run unwind
@@ -158,7 +164,12 @@ pub fn main() !void {
                 return error.InvalidArgument;
             }
             const format = try parseFormat(sub.args.format, &stderr_w.interface);
-            status.run(allocator, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
+            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            defer run_arena.deinit();
+            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            defer scratch_arena.deinit();
+            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            status.run(ctx, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "status", err);
             };
         },
@@ -174,7 +185,12 @@ pub fn main() !void {
                 stderr_w.interface.print("usage: drift link <doc-path> [anchor]\n", .{}) catch {};
                 return error.InvalidArgument;
             }
-            link.run(allocator, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| {
+            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            defer run_arena.deinit();
+            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            defer scratch_arena.deinit();
+            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "link", err);
             };
         },
@@ -193,7 +209,12 @@ pub fn main() !void {
                 stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
                 return error.InvalidArgument;
             }
-            unlink.run(allocator, &stdout_w.interface, &stderr_w.interface, doc_path, anchor) catch |err| {
+            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            defer run_arena.deinit();
+            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            defer scratch_arena.deinit();
+            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            unlink.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, anchor) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "unlink", err);
             };
         },
@@ -206,7 +227,12 @@ pub fn main() !void {
                 stderr_w.interface.print("usage: drift refs <path>\n", .{}) catch {};
                 return error.InvalidArgument;
             }
-            refs.run(allocator, &stdout_w.interface, &stderr_w.interface, target) catch |err| {
+            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            defer run_arena.deinit();
+            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            defer scratch_arena.deinit();
+            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            refs.run(ctx, &stdout_w.interface, &stderr_w.interface, target) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "refs", err);
             };
         },

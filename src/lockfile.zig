@@ -3,24 +3,12 @@ const std = @import("std");
 pub const MetadataField = struct {
     key: []const u8,
     value: []const u8,
-
-    fn deinit(self: MetadataField, allocator: std.mem.Allocator) void {
-        allocator.free(self.key);
-        allocator.free(self.value);
-    }
 };
 
 pub const Binding = struct {
     doc_path: []const u8,
     target: []const u8,
     metadata: std.ArrayList(MetadataField),
-
-    pub fn deinit(self: *Binding, allocator: std.mem.Allocator) void {
-        allocator.free(self.doc_path);
-        allocator.free(self.target);
-        for (self.metadata.items) |field| field.deinit(allocator);
-        self.metadata.deinit(allocator);
-    }
 
     pub fn fieldValue(self: *const Binding, key: []const u8) ?[]const u8 {
         for (self.metadata.items) |field| {
@@ -29,6 +17,7 @@ pub const Binding = struct {
         return null;
     }
 
+    /// Updates or appends a metadata field. On replace, frees the old value with `allocator` before allocating the new slice.
     pub fn setField(self: *Binding, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
         for (self.metadata.items) |*field| {
             if (std.mem.eql(u8, field.key, key)) {
@@ -49,22 +38,11 @@ pub const Lockfile = struct {
     lockfile_path: []const u8,
     exists: bool,
     bindings: std.ArrayList(Binding),
-
-    pub fn deinit(self: *Lockfile, allocator: std.mem.Allocator) void {
-        allocator.free(self.root_path);
-        allocator.free(self.lockfile_path);
-        for (self.bindings.items) |*binding| binding.deinit(allocator);
-        self.bindings.deinit(allocator);
-    }
 };
 
 pub const DocBindings = struct {
     path: []const u8,
     bindings: std.ArrayList(*Binding),
-
-    pub fn deinit(self: *DocBindings, allocator: std.mem.Allocator) void {
-        self.bindings.deinit(allocator);
-    }
 };
 
 pub const ParseError = error{
@@ -72,59 +50,61 @@ pub const ParseError = error{
     InvalidMetadataField,
 };
 
-pub fn discover(allocator: std.mem.Allocator, start_path: []const u8) !Lockfile {
-    const resolved_start = if (std.fs.path.isAbsolute(start_path))
-        try allocator.dupe(u8, start_path)
+/// `run` holds durable lockfile state; `scratch` holds walk temporaries and the lockfile file buffer (reset by caller).
+pub fn discover(run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: []const u8) !Lockfile {
+    const resolved_run = if (std.fs.path.isAbsolute(start_path))
+        try run.dupe(u8, start_path)
     else
-        try std.fs.cwd().realpathAlloc(allocator, start_path);
-    defer allocator.free(resolved_start);
+        try std.fs.cwd().realpathAlloc(run, start_path);
+    defer run.free(resolved_run);
 
-    var current = try allocator.dupe(u8, resolved_start);
-    defer allocator.free(current);
+    var current = try scratch.dupe(u8, resolved_run);
 
     while (true) {
-        const candidate = try std.fs.path.join(allocator, &.{ current, "drift.lock" });
-        errdefer allocator.free(candidate);
+        const candidate = try std.fs.path.join(scratch, &.{ current, "drift.lock" });
 
         if (fileExists(candidate)) {
-            const lockfile = try readAtPath(allocator, current, candidate, true);
-            allocator.free(candidate);
-            return lockfile;
+            return try readAtPath(run, scratch, current, candidate, true);
         }
-        allocator.free(candidate);
 
         const parent = parentPath(current) orelse {
             return .{
-                .root_path = try allocator.dupe(u8, resolved_start),
-                .lockfile_path = try std.fs.path.join(allocator, &.{ resolved_start, "drift.lock" }),
+                .root_path = try run.dupe(u8, resolved_run),
+                .lockfile_path = try std.fs.path.join(run, &.{ resolved_run, "drift.lock" }),
                 .exists = false,
                 .bindings = .{},
             };
         };
-        const next_current = try allocator.dupe(u8, parent);
-        allocator.free(current);
-        current = next_current;
+        current = try scratch.dupe(u8, parent);
     }
 }
 
-pub fn readAtPath(allocator: std.mem.Allocator, root_path: []const u8, lockfile_path: []const u8, exists: bool) !Lockfile {
+pub fn readAtPath(run: std.mem.Allocator, scratch: std.mem.Allocator, root_path: []const u8, lockfile_path: []const u8, exists: bool) !Lockfile {
     var bindings: std.ArrayList(Binding) = .{};
     errdefer {
-        for (bindings.items) |*binding| binding.deinit(allocator);
-        bindings.deinit(allocator);
+        for (bindings.items) |*binding| {
+            run.free(binding.doc_path);
+            run.free(binding.target);
+            for (binding.metadata.items) |field| {
+                run.free(field.key);
+                run.free(field.value);
+            }
+            binding.metadata.deinit(run);
+        }
+        bindings.deinit(run);
     }
 
     if (exists) {
         const file = try openPath(lockfile_path);
         defer file.close();
-        const content = try file.readToEndAlloc(allocator, 1024 * 1024);
-        defer allocator.free(content);
-        try parseInto(allocator, content, &bindings);
+        const content = try file.readToEndAlloc(scratch, 1024 * 1024);
+        defer scratch.free(content);
+        try parseInto(run, content, &bindings);
     }
 
     return .{
-        .root_path = try allocator.dupe(u8, root_path),
-        .lockfile_path = try allocator.dupe(u8, lockfile_path),
+        .root_path = try run.dupe(u8, root_path),
+        .lockfile_path = try run.dupe(u8, lockfile_path),
         .exists = exists,
         .bindings = bindings,
     };
@@ -142,7 +122,7 @@ pub fn parseInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
 pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayList(DocBindings) {
     var docs: std.ArrayList(DocBindings) = .{};
     errdefer {
-        for (docs.items) |*doc| doc.deinit(allocator);
+        for (docs.items) |*doc| doc.bindings.deinit(allocator);
         docs.deinit(allocator);
     }
 
@@ -162,7 +142,7 @@ pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayL
                 .path = binding.doc_path,
                 .bindings = .{},
             };
-            errdefer doc.deinit(allocator);
+            errdefer doc.bindings.deinit(allocator);
             try doc.bindings.append(allocator, binding);
             try docs.append(allocator, doc);
         }
@@ -185,15 +165,26 @@ pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayL
     return docs;
 }
 
-pub fn serialize(allocator: std.mem.Allocator, bindings: []const Binding) ![]u8 {
+fn renderLineToWriter(writer: anytype, binding: Binding) !void {
+    try writer.print("{s} -> {s}", .{ binding.doc_path, binding.target });
+    for (binding.metadata.items) |field| {
+        try writer.print(" {s}:{s}", .{ field.key, field.value });
+    }
+}
+
+/// Writes sorted lockfile lines to `writer`. Uses `scratch` for sort temporaries.
+pub fn serializeToWriter(scratch: std.mem.Allocator, writer: anytype, bindings: []const Binding) !void {
     var lines: std.ArrayList([]const u8) = .{};
     defer {
-        for (lines.items) |line| allocator.free(line);
-        lines.deinit(allocator);
+        for (lines.items) |line| scratch.free(line);
+        lines.deinit(scratch);
     }
 
     for (bindings) |binding| {
-        try lines.append(allocator, try renderLine(allocator, binding));
+        var row: std.ArrayList(u8) = .{};
+        errdefer row.deinit(scratch);
+        try renderLineToWriter(row.writer(scratch), binding);
+        try lines.append(scratch, try row.toOwnedSlice(scratch));
     }
 
     std.mem.sort([]const u8, lines.items, {}, struct {
@@ -202,25 +193,26 @@ pub fn serialize(allocator: std.mem.Allocator, bindings: []const Binding) ![]u8 
         }
     }.lessThan);
 
-    var output: std.ArrayList(u8) = .{};
-    errdefer output.deinit(allocator);
-    const writer = output.writer(allocator);
-
     for (lines.items) |line| {
         try writer.writeAll(line);
         try writer.writeByte('\n');
     }
+}
 
+pub fn serialize(allocator: std.mem.Allocator, bindings: []const Binding) ![]u8 {
+    var output: std.ArrayList(u8) = .{};
+    errdefer output.deinit(allocator);
+    try serializeToWriter(allocator, output.writer(allocator), bindings);
     return try output.toOwnedSlice(allocator);
 }
 
-pub fn writeFile(lockfile: *const Lockfile, allocator: std.mem.Allocator) !void {
-    const content = try serialize(allocator, lockfile.bindings.items);
-    defer allocator.free(content);
-
+pub fn writeFile(lockfile: *const Lockfile, scratch: std.mem.Allocator) !void {
     const file = try createPath(lockfile.lockfile_path);
     defer file.close();
-    try file.writeAll(content);
+    var buf: [4096]u8 = undefined;
+    var fw = file.writer(&buf);
+    defer fw.interface.flush() catch {};
+    try serializeToWriter(scratch, &fw.interface, lockfile.bindings.items);
 }
 
 fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
@@ -233,10 +225,7 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
     const target = tokens.next() orelse return error.InvalidBindingLine;
 
     var metadata: std.ArrayList(MetadataField) = .{};
-    errdefer {
-        for (metadata.items) |field| field.deinit(allocator);
-        metadata.deinit(allocator);
-    }
+    errdefer metadata.deinit(allocator);
 
     while (tokens.next()) |token| {
         const colon = std.mem.indexOfScalar(u8, token, ':') orelse return error.InvalidMetadataField;
@@ -252,19 +241,6 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
         .target = try allocator.dupe(u8, target),
         .metadata = metadata,
     };
-}
-
-fn renderLine(allocator: std.mem.Allocator, binding: Binding) ![]u8 {
-    var output: std.ArrayList(u8) = .{};
-    errdefer output.deinit(allocator);
-    const writer = output.writer(allocator);
-
-    try writer.print("{s} -> {s}", .{ binding.doc_path, binding.target });
-    for (binding.metadata.items) |field| {
-        try writer.print(" {s}:{s}", .{ field.key, field.value });
-    }
-
-    return try output.toOwnedSlice(allocator);
 }
 
 fn fileExists(path: []const u8) bool {
@@ -304,7 +280,15 @@ test "parseInto reads bindings and metadata" {
 
     var bindings: std.ArrayList(Binding) = .{};
     defer {
-        for (bindings.items) |*binding| binding.deinit(allocator);
+        for (bindings.items) |*binding| {
+            allocator.free(binding.doc_path);
+            allocator.free(binding.target);
+            for (binding.metadata.items) |field| {
+                allocator.free(field.key);
+                allocator.free(field.value);
+            }
+            binding.metadata.deinit(allocator);
+        }
         bindings.deinit(allocator);
     }
 
@@ -321,7 +305,15 @@ test "serialize sorts lines and appends trailing newline" {
 
     var bindings: std.ArrayList(Binding) = .{};
     defer {
-        for (bindings.items) |*binding| binding.deinit(allocator);
+        for (bindings.items) |*binding| {
+            allocator.free(binding.doc_path);
+            allocator.free(binding.target);
+            for (binding.metadata.items) |field| {
+                allocator.free(field.key);
+                allocator.free(field.value);
+            }
+            binding.metadata.deinit(allocator);
+        }
         bindings.deinit(allocator);
     }
 
@@ -347,6 +339,9 @@ test "serialize sorts lines and appends trailing newline" {
 
 test "discover walks up to find drift.lock" {
     const allocator = std.testing.allocator;
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -359,8 +354,21 @@ test "discover walks up to find drift.lock" {
     const start_path = try tmp.dir.realpathAlloc(allocator, "repo/nested/work");
     defer allocator.free(start_path);
 
-    var discovered = try discover(allocator, start_path);
-    defer discovered.deinit(allocator);
+    var discovered = try discover(allocator, scratch_arena.allocator(), start_path);
+    defer {
+        for (discovered.bindings.items) |*b| {
+            allocator.free(b.doc_path);
+            allocator.free(b.target);
+            for (b.metadata.items) |field| {
+                allocator.free(field.key);
+                allocator.free(field.value);
+            }
+            b.metadata.deinit(allocator);
+        }
+        discovered.bindings.deinit(allocator);
+        allocator.free(discovered.root_path);
+        allocator.free(discovered.lockfile_path);
+    }
 
     try std.testing.expect(discovered.exists);
     try std.testing.expectEqual(@as(usize, 1), discovered.bindings.items.len);
@@ -370,6 +378,9 @@ test "discover walks up to find drift.lock" {
 
 test "discover returns empty lockfile rooted at start path when missing" {
     const allocator = std.testing.allocator;
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -378,8 +389,12 @@ test "discover returns empty lockfile rooted at start path when missing" {
     const start_path = try tmp.dir.realpathAlloc(allocator, "repo");
     defer allocator.free(start_path);
 
-    var discovered = try discover(allocator, start_path);
-    defer discovered.deinit(allocator);
+    var discovered = try discover(allocator, scratch_arena.allocator(), start_path);
+    defer {
+        discovered.bindings.deinit(allocator);
+        allocator.free(discovered.root_path);
+        allocator.free(discovered.lockfile_path);
+    }
 
     try std.testing.expect(!discovered.exists);
     try std.testing.expectEqual(@as(usize, 0), discovered.bindings.items.len);

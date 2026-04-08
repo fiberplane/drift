@@ -21,7 +21,7 @@ fn isMarkdownTrackedPath(path: []const u8) bool {
 
 /// Append inline `@./` anchors from `content` into `anchors`, skipping duplicates of existing entries.
 fn mergeInlineAnchors(allocator: std.mem.Allocator, anchors: *std.ArrayList([]const u8), content: []const u8) !void {
-    var inline_anchors = parseInlineAnchors(allocator, content);
+    var inline_anchors = try parseInlineAnchors(allocator, content);
     defer inline_anchors.deinit(allocator);
 
     for (inline_anchors.items) |anchor| {
@@ -73,7 +73,7 @@ pub fn findDocs(allocator: std.mem.Allocator, docs: *std.ArrayList(Doc)) !void {
         };
         defer allocator.free(content);
 
-        if (frontmatter.parseDriftDoc(allocator, content)) |drift_doc| {
+        if (try frontmatter.parseDriftDoc(allocator, content)) |drift_doc| {
             var doc = drift_doc;
             errdefer {
                 for (doc.anchors.items) |b| allocator.free(b);
@@ -104,7 +104,7 @@ pub fn findAndSortDocs(allocator: std.mem.Allocator, docs: *std.ArrayList(Doc)) 
 }
 
 /// Parse inline anchors (@./path references) from markdown content body.
-pub fn parseInlineAnchors(allocator: std.mem.Allocator, content: []const u8) std.ArrayList([]const u8) {
+pub fn parseInlineAnchors(allocator: std.mem.Allocator, content: []const u8) !std.ArrayList([]const u8) {
     var anchors: std.ArrayList([]const u8) = .{};
 
     // Find body: skip frontmatter if present
@@ -154,15 +154,8 @@ pub fn parseInlineAnchors(allocator: std.mem.Allocator, content: []const u8) std
 
             if (path_end > path_start) {
                 const path = body[path_start..path_end];
-                const duped = allocator.dupe(u8, path) catch {
-                    pos = path_end;
-                    continue;
-                };
-                anchors.append(allocator, duped) catch {
-                    allocator.free(duped);
-                    pos = path_end;
-                    continue;
-                };
+                const duped = try allocator.dupe(u8, path);
+                try anchors.append(allocator, duped);
             }
 
             pos = path_end;
@@ -276,7 +269,7 @@ test "parseInlineAnchors strips surrounding quote punctuation" {
         \\
     ;
 
-    var anchors = parseInlineAnchors(allocator, content);
+    var anchors = try parseInlineAnchors(allocator, content);
     defer {
         for (anchors.items) |anchor| allocator.free(anchor);
         anchors.deinit(allocator);

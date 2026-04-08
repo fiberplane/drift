@@ -183,9 +183,10 @@ fn parseBlameInfoOutput(allocator: std.mem.Allocator, stdout: []const u8) !?Blam
 
 /// Get blame info for the most recent commit that changed a file after a given revision.
 /// Returns null if no commits changed the file after the revision.
-/// Caller owns the returned BlameInfo and must call deinit on it.
+/// String fields are allocated with `result_allocator`. Subprocess I/O buffers use `subprocess_allocator`.
 pub fn getBlameInfo(
-    allocator: std.mem.Allocator,
+    result_allocator: std.mem.Allocator,
+    subprocess_allocator: std.mem.Allocator,
     cwd_path: []const u8,
     file_path: []const u8,
     after_revision: []const u8,
@@ -193,27 +194,29 @@ pub fn getBlameInfo(
 ) !?BlameInfo {
     switch (vcs_kind) {
         .git => {
-            const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{after_revision});
-            defer allocator.free(range);
+            const range = try std.fmt.allocPrint(subprocess_allocator, "{s}..HEAD", .{after_revision});
+            defer subprocess_allocator.free(range);
 
             const result = std.process.Child.run(.{
-                .allocator = allocator,
+                .allocator = subprocess_allocator,
                 .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", range, "--", file_path },
                 .cwd = cwd_path,
                 .max_output_bytes = 256 * 1024,
             }) catch return null;
-            defer allocator.free(result.stderr);
-            defer allocator.free(result.stdout);
+            defer subprocess_allocator.free(result.stderr);
+            defer subprocess_allocator.free(result.stdout);
 
-            return try parseBlameInfoOutput(allocator, result.stdout);
+            return try parseBlameInfoOutput(result_allocator, result.stdout);
         },
         .jj => return null, // jj support disabled
     }
 }
 
 /// Get blame info for the most recent commit that touched a file, regardless of baseline.
+/// String fields are allocated with `result_allocator`. Subprocess I/O buffers use `subprocess_allocator`.
 pub fn getLatestBlameInfo(
-    allocator: std.mem.Allocator,
+    result_allocator: std.mem.Allocator,
+    subprocess_allocator: std.mem.Allocator,
     cwd_path: []const u8,
     file_path: []const u8,
     vcs_kind: VcsKind,
@@ -221,15 +224,15 @@ pub fn getLatestBlameInfo(
     switch (vcs_kind) {
         .git => {
             const result = std.process.Child.run(.{
-                .allocator = allocator,
+                .allocator = subprocess_allocator,
                 .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", "--", file_path },
                 .cwd = cwd_path,
                 .max_output_bytes = 256 * 1024,
             }) catch return null;
-            defer allocator.free(result.stderr);
-            defer allocator.free(result.stdout);
+            defer subprocess_allocator.free(result.stderr);
+            defer subprocess_allocator.free(result.stdout);
 
-            return try parseBlameInfoOutput(allocator, result.stdout);
+            return try parseBlameInfoOutput(result_allocator, result.stdout);
         },
         .jj => return null,
     }
@@ -272,15 +275,16 @@ pub fn normalizeGitHubUrl(allocator: std.mem.Allocator, url: []const u8) ?[]cons
 
 /// Get the normalized repo identity by querying `git remote get-url origin`.
 /// Returns `github:owner/repo` or null if not a GitHub remote.
-pub fn getRepoIdentity(allocator: std.mem.Allocator, cwd_path: []const u8) ?[]const u8 {
+/// Result string is allocated with `result_allocator`; subprocess buffers use `subprocess_allocator`.
+pub fn getRepoIdentity(result_allocator: std.mem.Allocator, subprocess_allocator: std.mem.Allocator, cwd_path: []const u8) ?[]const u8 {
     const result = std.process.Child.run(.{
-        .allocator = allocator,
+        .allocator = subprocess_allocator,
         .argv = &.{ "git", "remote", "get-url", "origin" },
         .cwd = cwd_path,
         .max_output_bytes = 4096,
     }) catch return null;
-    defer allocator.free(result.stderr);
-    defer allocator.free(result.stdout);
+    defer subprocess_allocator.free(result.stderr);
+    defer subprocess_allocator.free(result.stdout);
 
     switch (result.term) {
         .Exited => |code| if (code != 0) return null,
@@ -290,7 +294,7 @@ pub fn getRepoIdentity(allocator: std.mem.Allocator, cwd_path: []const u8) ?[]co
     const trimmed = std.mem.trimRight(u8, result.stdout, "\n\r ");
     if (trimmed.len == 0) return null;
 
-    return normalizeGitHubUrl(allocator, trimmed);
+    return normalizeGitHubUrl(result_allocator, trimmed);
 }
 
 /// Get the current change/commit ID (short form) for auto-provenance.

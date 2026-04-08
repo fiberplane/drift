@@ -329,37 +329,33 @@ const ParseResult = struct {
 
 /// Parse drift frontmatter from file content. Returns anchors list and origin if this is a drift doc, null otherwise.
 /// Checks both YAML frontmatter and HTML comment-based anchors, merging results.
-pub fn parseDriftDoc(allocator: std.mem.Allocator, content: []const u8) ?DriftDoc {
+pub fn parseDriftDoc(allocator: std.mem.Allocator, content: []const u8) !?DriftDoc {
     var anchors: std.ArrayList([]const u8) = .{};
     var found_source = false;
     var origin: ?[]const u8 = null;
 
     // 1. Parse YAML frontmatter anchors
-    if (parseFrontmatterAnchors(allocator, content)) |fm_result| {
+    if (try parseFrontmatterAnchors(allocator, content)) |fm_result| {
         var fm_anchors = fm_result.anchors;
         found_source = true;
         if (fm_result.origin) |o| {
             if (origin == null) origin = o else allocator.free(o);
         }
         for (fm_anchors.items) |b| {
-            anchors.append(allocator, b) catch {
-                allocator.free(b);
-            };
+            try anchors.append(allocator, b);
         }
         fm_anchors.deinit(allocator);
     }
 
     // 2. Parse HTML comment-based anchors
-    if (parseCommentAnchors(allocator, content)) |comment_result| {
+    if (try parseCommentAnchors(allocator, content)) |comment_result| {
         var comment_anchors = comment_result.anchors;
         found_source = true;
         if (comment_result.origin) |o| {
             if (origin == null) origin = o else allocator.free(o);
         }
         for (comment_anchors.items) |b| {
-            anchors.append(allocator, b) catch {
-                allocator.free(b);
-            };
+            try anchors.append(allocator, b);
         }
         comment_anchors.deinit(allocator);
     }
@@ -375,9 +371,9 @@ pub fn parseDriftDoc(allocator: std.mem.Allocator, content: []const u8) ?DriftDo
 }
 
 /// Parse anchors from YAML frontmatter (--- ... --- block).
-fn parseFrontmatterAnchors(allocator: std.mem.Allocator, content: []const u8) ?ParseResult {
+fn parseFrontmatterAnchors(allocator: std.mem.Allocator, content: []const u8) !?ParseResult {
     const fm = markdown.yamlFrontmatterInner(content) orelse return null;
-    var split = parseFrontmatterSplit(allocator, fm) catch return null;
+    var split = try parseFrontmatterSplit(allocator, fm);
     defer split.deinit(allocator);
     if (!split.has_drift) return null;
 
@@ -388,21 +384,18 @@ fn parseFrontmatterAnchors(allocator: std.mem.Allocator, content: []const u8) ?P
     }
 
     for (split.block.files.items) |s| {
-        const duped = allocator.dupe(u8, s) catch return null;
-        anchors.append(allocator, duped) catch {
-            allocator.free(duped);
-            return null;
-        };
+        const duped = try allocator.dupe(u8, s);
+        try anchors.append(allocator, duped);
     }
 
-    const origin = originFromDriftBlockLines(allocator, &split.block) catch return null;
+    const origin = try originFromDriftBlockLines(allocator, &split.block);
 
     return .{ .anchors = anchors, .origin = origin };
 }
 
 /// Parse anchors from `<!-- drift: ... -->` HTML comment blocks.
 /// Returns null if no comment-based anchors are found.
-fn parseCommentAnchors(allocator: std.mem.Allocator, content: []const u8) ?ParseResult {
+fn parseCommentAnchors(allocator: std.mem.Allocator, content: []const u8) !?ParseResult {
     const marker = markdown.drift_html_comment_prefix;
     var anchors: std.ArrayList([]const u8) = .{};
     var found = false;
@@ -415,38 +408,17 @@ fn parseCommentAnchors(allocator: std.mem.Allocator, content: []const u8) ?Parse
         const close_offset = std.mem.indexOf(u8, content[block_start..], "-->") orelse break;
         const block_content = content[block_start .. block_start + close_offset];
 
-        var block = parseDriftBlockCommentBody(allocator, block_content) catch {
-            for (anchors.items) |b| allocator.free(b);
-            anchors.deinit(allocator);
-            if (origin) |o| allocator.free(o);
-            return null;
-        };
+        var block = try parseDriftBlockCommentBody(allocator, block_content);
         defer block.deinit(allocator);
 
         for (block.files.items) |s| {
-            const duped = allocator.dupe(u8, s) catch {
-                for (anchors.items) |b| allocator.free(b);
-                anchors.deinit(allocator);
-                if (origin) |o| allocator.free(o);
-                return null;
-            };
-            anchors.append(allocator, duped) catch {
-                allocator.free(duped);
-                for (anchors.items) |b| allocator.free(b);
-                anchors.deinit(allocator);
-                if (origin) |o| allocator.free(o);
-                return null;
-            };
+            const duped = try allocator.dupe(u8, s);
+            try anchors.append(allocator, duped);
             found = true;
         }
 
         if (origin == null) {
-            origin = originFromCommentBlock(allocator, &block) catch {
-                for (anchors.items) |b| allocator.free(b);
-                anchors.deinit(allocator);
-                if (origin) |o| allocator.free(o);
-                return null;
-            };
+            origin = try originFromCommentBlock(allocator, &block);
         }
 
         pos = block_start + close_offset + 3;
@@ -894,7 +866,7 @@ test "linkAnchor preserves existing non-drift frontmatter" {
     try std.testing.expect(std.mem.indexOf(u8, result, "  files:") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "    - src/target.ts") != null);
 
-    var doc = parseDriftDoc(allocator, result) orelse return error.TestUnexpectedResult;
+    var doc = (try parseDriftDoc(allocator, result)) orelse return error.TestUnexpectedResult;
     defer {
         for (doc.anchors.items) |b| allocator.free(b);
         doc.anchors.deinit(allocator);
@@ -922,7 +894,7 @@ test "linkAnchor adds files section when drift exists without files" {
     try std.testing.expect(std.mem.indexOf(u8, result, "    - src/target.ts") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "title: My Doc\n  files:") == null);
 
-    var doc = parseDriftDoc(allocator, result) orelse return error.TestUnexpectedResult;
+    var doc = (try parseDriftDoc(allocator, result)) orelse return error.TestUnexpectedResult;
     defer {
         for (doc.anchors.items) |b| allocator.free(b);
         doc.anchors.deinit(allocator);
@@ -937,7 +909,7 @@ test "linkAnchor adds files section when drift exists without files" {
 test "parseDriftDoc parses comment-based anchors" {
     const allocator = std.testing.allocator;
     const content = "# My Doc\n\n<!-- drift:\n  files:\n    - src/main.zig\n    - src/vcs.zig\n-->\n\nSome content.\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -953,7 +925,7 @@ test "parseDriftDoc parses comment-based anchors" {
 test "parseDriftDoc merges frontmatter and comment anchors" {
     const allocator = std.testing.allocator;
     const content = "---\ndrift:\n  files:\n    - src/a.ts\n---\n\n<!-- drift:\n  files:\n    - src/b.ts\n-->\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -967,7 +939,7 @@ test "parseDriftDoc merges frontmatter and comment anchors" {
 test "parseDriftDoc parses comment with provenance" {
     const allocator = std.testing.allocator;
     const content = "<!-- drift:\n  files:\n    - src/main.zig@abc123\n-->\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -1048,7 +1020,7 @@ test "parseCommentAnchors skips markers inside fenced code blocks" {
         \\-->
         \\```
     ;
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -1065,7 +1037,7 @@ test "parseCommentAnchors skips markers inside fenced code blocks" {
 test "parseDriftDoc parses origin from YAML frontmatter" {
     const allocator = std.testing.allocator;
     const content = "---\ndrift:\n  origin: github:owner/repo\n  files:\n    - src/main.zig\n---\n# Doc\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -1080,7 +1052,7 @@ test "parseDriftDoc parses origin from YAML frontmatter" {
 test "parseDriftDoc returns null origin when not present" {
     const allocator = std.testing.allocator;
     const content = "---\ndrift:\n  files:\n    - src/main.zig\n---\n# Doc\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -1095,7 +1067,7 @@ test "parseDriftDoc returns null origin when not present" {
 test "parseDriftDoc parses origin from comment-based anchors" {
     const allocator = std.testing.allocator;
     const content = "# Doc\n\n<!-- drift:\n  origin: github:acme/lib\n  files:\n    - src/main.zig\n-->\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -1110,7 +1082,7 @@ test "parseDriftDoc parses origin from comment-based anchors" {
 test "parseDriftDoc parses anchor with quoted path segment" {
     const allocator = std.testing.allocator;
     const content = "---\ndrift:\n  files:\n    - src/main\"file.ts\n---\n# Doc\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {
@@ -1125,7 +1097,7 @@ test "parseDriftDoc parses anchor with quoted path segment" {
 test "parseDriftDoc origin before files in frontmatter" {
     const allocator = std.testing.allocator;
     const content = "---\ndrift:\n  origin: github:test/proj\n  files:\n    - src/a.ts\n    - src/b.ts\n---\n";
-    var doc = parseDriftDoc(allocator, content) orelse {
+    var doc = (try parseDriftDoc(allocator, content)) orelse {
         return error.TestUnexpectedResult;
     };
     defer {

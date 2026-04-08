@@ -160,6 +160,10 @@ docs/auth.md
            └──────────────┬────────────┘
 ```
 
+### Memory model
+
+Every command creates two arena allocators backed by the GPA in `main()`. The **run arena** owns command-lifetime data (lockfile, file cache, result model). The **scratch arena** owns per-item temporaries (path resolution, subprocess output) and is reset between loop iterations. Fixed-width formatting uses stack buffers. Only OS/C resources (child processes, tree-sitter parsers) need explicit `deinit()`. See Decision 12 in `DECISIONS.md` for the full ruleset.
+
 Additional modules:
 - `lockfile.zig` — read, write, and query `drift.lock` bindings; line-oriented parser and serializer
 - `frontmatter.zig` — legacy migration only: strips old YAML frontmatter and `<!-- drift: ... -->` comment blocks during `drift link`

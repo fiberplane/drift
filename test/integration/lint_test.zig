@@ -550,6 +550,32 @@ test "check --changed scopes checking to affected docs" {
     try helpers.expectNotContains(result.stdout, "docs/payments.md");
 }
 
+test "check --changed uses path segments not raw byte prefix (auth vs authz)" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/auth.md", "# Auth\n");
+    try repo.writeFile("docs/authz.md", "# Authz\n");
+    try repo.writeFile("src/auth/login.ts", "export const x = 1;\n");
+    try repo.writeFile("src/authz/login.ts", "export const y = 1;\n");
+    try repo.commit("add docs and sources");
+
+    try linkDoc(&repo, "docs/auth.md", "src/auth/login.ts");
+    try linkDoc(&repo, "docs/authz.md", "src/authz/login.ts");
+    try repo.commit("link both docs");
+
+    try repo.writeFile("src/auth/login.ts", "export const x = 2;\n");
+    try repo.commit("modify auth only");
+
+    const result = try repo.runDrift(&.{ "check", "--changed", "src/auth" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "docs/auth.md");
+    try helpers.expectNotContains(result.stdout, "docs/authz.md");
+}
+
 test "check --changed returns ok when no bindings match the prefix" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);

@@ -100,7 +100,45 @@ The flat format was chosen because:
 - Both paths on every line — grep works in both directions for quick shell queries (`grep 'src/auth' drift.lock` finds all bindings involving auth code).
 - Trailing key:value pairs extend naturally without format version bumps. New metadata fields (e.g. a future `hash-algo:`) are just another pair on the line.
 
-## 12. Lockfile discovery by walking up
+## 12. Arena-oriented memory management
+
+drift uses arena allocators as the primary memory management strategy rather than individual alloc/free ownership. Every command creates two arenas backed by the GPA in `main()`:
+
+- **Run arena** — command-lifetime data. Lockfile, grouped spec bindings, file cache contents, parser cache, JSON result model, repo identity, normalized paths that survive the whole run.
+- **Scratch arena** — per-item temporaries. Path resolution intermediates, subprocess stdout/stderr, per-binding normalization, blame parsing scaffolding. Reset frequently (once per spec or once per binding in tight loops).
+- **Stack buffers** — fixed-width formatting only. Fingerprint hex (`[16]u8`), small `bufPrint` targets. Not used as a general allocator.
+
+### Rules
+
+1. `main()` owns one `GeneralPurposeAllocator`. It is the backing allocator and the leak detector. No other code creates a GPA.
+2. Every command entry point creates a `run_arena` and a `scratch_arena` backed by the GPA.
+3. All command-lifetime data goes in `run_arena`. Structs that only contain arena-backed slices and ArrayLists do not need `deinit()` for memory — the arena handles bulk teardown.
+4. All loop-local temporaries go in `scratch_arena`, reset between iterations.
+5. Stack buffers handle bounded formatting where the output size is known at comptime.
+6. Only OS and C resources get explicit `deinit()` / `destroy()`: child processes, tree-sitter parsers/queries/trees, open file handles. These objects may allocate Zig-owned buffers from an arena but still need resource teardown before arena teardown.
+
+### What this eliminates
+
+- Per-string `allocator.free()` and matching `errdefer` chains for command-scoped data.
+- Memory-owning `deinit()` methods on pure data structs (lockfile bindings, spec groups, parsed targets, JSON result arrays).
+- Silent partial results from swallowed allocation failures — arena OOM propagates naturally via `try`.
+
+### What this preserves
+
+- `std.testing.allocator` in tests for leak detection (it is not an arena).
+- Explicit resource cleanup for non-memory resources.
+- The GPA as the outermost safety net in debug builds.
+
+### API shape
+
+Helpers communicate lifetime intent through which allocator they accept:
+
+- Functions that produce command-lifetime results take `run_allocator`.
+- Functions that only need temporaries take `scratch_allocator`.
+- Functions that format fixed-width output write into caller-provided stack buffers.
+- Functions that produce output write to a `std.io.Writer`, not into allocated buffers.
+
+## 13. Lockfile discovery by walking up
 
 `drift.lock` is found by walking up from cwd, not by asking git for the repo root. This decouples drift from git for project root discovery — the same pattern as `Cargo.toml`, `package.json`, and `go.mod`. The lockfile itself becomes the project root marker.
 

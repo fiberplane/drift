@@ -1,22 +1,22 @@
 const std = @import("std");
+const CommandContext = @import("../context.zig").CommandContext;
 const lint = @import("lint.zig");
 const lockfile = @import("../lockfile.zig");
 
 pub const Format = lint.Format;
 
-pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
+pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
     _ = stderr_w;
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(cwd_path);
+    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
 
-    var lf = try lockfile.discover(allocator, cwd_path);
-    defer lf.deinit(allocator);
+    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    ctx.resetScratch();
 
-    var docs = try lockfile.groupByDoc(allocator, lf.bindings.items);
+    var docs = try lockfile.groupByDoc(ctx.run_arena, lf.bindings.items);
     defer {
-        for (docs.items) |*doc| doc.deinit(allocator);
-        docs.deinit(allocator);
+        for (docs.items) |*doc| doc.bindings.deinit(ctx.run_arena);
+        docs.deinit(ctx.run_arena);
     }
 
     switch (format) {

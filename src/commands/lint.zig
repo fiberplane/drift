@@ -1,6 +1,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const drift_check_v1 = @import("payload");
+const CommandContext = @import("../context.zig").CommandContext;
 const lockfile = @import("../lockfile.zig");
 const symbols = @import("../symbols.zig");
 const vcs = @import("../vcs.zig");
@@ -8,24 +9,26 @@ const vcs = @import("../vcs.zig");
 pub const Format = enum { text, json };
 pub const RunStatus = enum { pass, stale };
 
+/// Map from absolute path → current working-tree file bytes for one `lint` / `check` run.
+///
+/// Uses a child arena backed by `parent` so keys, values, and map metadata share one lifetime;
+/// `deinit` tears down the map then resets the arena. Pass `CommandContext.run` as `parent`.
+///
+/// **Init:** call `init` on the address where the struct will live (`var c: FileCache = undefined; c.init(run);`).
+/// Returning a new `FileCache` from a helper would leave `StringHashMap`'s allocator pointing at a
+/// stack copy of `ArenaAllocator` (undefined behavior).
 const FileCache = struct {
-    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     current: std.StringHashMap([]const u8),
 
-    fn init(allocator: std.mem.Allocator) FileCache {
-        return .{
-            .allocator = allocator,
-            .current = std.StringHashMap([]const u8).init(allocator),
-        };
+    fn init(self: *FileCache, parent: std.mem.Allocator) void {
+        self.arena = std.heap.ArenaAllocator.init(parent);
+        self.current = std.StringHashMap([]const u8).init(self.arena.allocator());
     }
 
     fn deinit(self: *FileCache) void {
-        var it = self.current.iterator();
-        while (it.next()) |kv| {
-            self.allocator.free(kv.key_ptr.*);
-            self.allocator.free(kv.value_ptr.*);
-        }
         self.current.deinit();
+        self.arena.deinit();
     }
 
     fn getCurrent(self: *FileCache, absolute_path: []const u8) !?[]const u8 {
@@ -37,12 +40,9 @@ const FileCache = struct {
         };
         defer file.close();
 
-        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024);
-        errdefer self.allocator.free(content);
-
-        const key = try self.allocator.dupe(u8, absolute_path);
-        errdefer self.allocator.free(key);
-
+        const a = self.arena.allocator();
+        const content = try file.readToEndAlloc(a, 1024 * 1024);
+        const key = try a.dupe(u8, absolute_path);
         try self.current.put(key, content);
         return content;
     }
@@ -85,10 +85,6 @@ fn anchorResultStr(r: AnchorResult) []const u8 {
 const JsonAnchorRow = struct {
     blame_storage: ?vcs.BlameInfo,
     wire: drift_check_v1.Anchor,
-
-    fn deinit(self: *JsonAnchorRow, allocator: std.mem.Allocator) void {
-        if (self.blame_storage) |b| b.deinit(allocator);
-    }
 };
 
 const DocCheckResult = struct {
@@ -96,11 +92,6 @@ const DocCheckResult = struct {
     origin: ?[]const u8,
     result: AnchorResult,
     anchors: std.ArrayList(JsonAnchorRow),
-
-    fn deinit(self: *DocCheckResult, allocator: std.mem.Allocator) void {
-        for (self.anchors.items) |*a| a.deinit(allocator);
-        self.anchors.deinit(allocator);
-    }
 };
 
 const CheckResult = struct {
@@ -116,11 +107,6 @@ const CheckResult = struct {
     anchors_fresh: u32,
     anchors_stale: u32,
     anchors_skipped: u32,
-
-    fn deinit(self: *CheckResult, allocator: std.mem.Allocator) void {
-        for (self.docs.items) |*s| s.deinit(allocator);
-        self.docs.deinit(allocator);
-    }
 
     fn specsChecked(self: *const CheckResult) u32 {
         return self.docs_fresh + self.docs_stale;
@@ -208,36 +194,37 @@ fn jsonAnchorFromOutcome(target: []const u8, parsed: ParsedTarget, outcome: Anch
 }
 
 pub fn run(
-    allocator: std.mem.Allocator,
+    ctx: CommandContext,
     stdout_w: *std.io.Writer,
     stderr_w: *std.io.Writer,
     format: Format,
     changed_path: ?[]const u8,
 ) !RunStatus {
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(cwd_path);
+    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
 
-    var lf = try lockfile.discover(allocator, cwd_path);
-    defer lf.deinit(allocator);
+    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    ctx.resetScratch();
 
-    var doc_groups = try lockfile.groupByDoc(allocator, lf.bindings.items);
+    var doc_groups = try lockfile.groupByDoc(ctx.run_arena, lf.bindings.items);
     defer {
-        for (doc_groups.items) |*doc| doc.deinit(allocator);
-        doc_groups.deinit(allocator);
+        for (doc_groups.items) |*doc| doc.bindings.deinit(ctx.run_arena);
+        doc_groups.deinit(ctx.run_arena);
     }
 
-    const detected_vcs = vcs.detectVcs();
-    const repo_identity = vcs.getRepoIdentity(allocator, cwd_path);
-    defer if (repo_identity) |ri| allocator.free(ri);
+    var parser_cache = symbols.ParserCache.init(ctx.run_arena);
+    defer parser_cache.deinit();
 
-    var file_cache = FileCache.init(allocator);
+    const detected_vcs = vcs.detectVcs();
+    const repo_identity = vcs.getRepoIdentity(ctx.run_arena, ctx.scratch(), cwd_path);
+
+    var file_cache: FileCache = undefined;
+    file_cache.init(ctx.run_arena);
     defer file_cache.deinit();
 
     const normalized_changed = if (changed_path) |raw|
-        try normalizeChangedPrefix(allocator, lf.root_path, cwd_path, raw)
+        try normalizeChangedPrefix(ctx, lf.root_path, cwd_path, raw)
     else
         null;
-    defer if (normalized_changed) |path| allocator.free(path);
 
     var text_sink_state = TextSinkState{ .writer = stdout_w };
 
@@ -259,7 +246,6 @@ pub fn run(
             .anchors_skipped = 0,
         };
     }
-    defer if (json_result_init) json_result.deinit(allocator);
 
     const sink: LintSink = switch (format) {
         .text => .{ .text = &text_sink_state },
@@ -283,13 +269,14 @@ pub fn run(
             .result = .fresh,
             .anchors = .{},
         };
-        errdefer doc_result.deinit(allocator);
 
         var fresh_count: usize = 0;
         var stale_count: usize = 0;
         var skip_count: usize = 0;
 
         for (doc.bindings.items) |binding| {
+            ctx.resetScratch();
+
             const origin = binding.fieldValue("origin");
             const sig = binding.fieldValue("sig");
             const parsed = parseTarget(binding.target, sig);
@@ -299,15 +286,15 @@ pub fn run(
                     const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
                     if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
                 }
-                break :blk checkBinding(allocator, lf.root_path, binding, &file_cache, detected_vcs) catch |err| {
+                break :blk checkBinding(ctx, format, &parser_cache, lf.root_path, binding, &file_cache, detected_vcs) catch |err| {
                     stderr_w.print("error checking {s}: {s}\n", .{ binding.target, @errorName(err) }) catch {};
                     return error.LintCheckFailed;
                 };
             };
 
             switch (sink) {
-                .text => |ts| textEmitAnchor(allocator, ts.writer, origin, binding.target, outcome),
-                .json => try doc_result.anchors.append(allocator, jsonAnchorFromOutcome(binding.target, parsed, outcome)),
+                .text => |ts| textEmitAnchor(ts.writer, origin, binding.target, outcome),
+                .json => try doc_result.anchors.append(ctx.run_arena, jsonAnchorFromOutcome(binding.target, parsed, outcome)),
             }
 
             switch (outcome.result) {
@@ -345,7 +332,7 @@ pub fn run(
                     },
                     .skip => r.docs_skipped += 1,
                 }
-                try r.docs.append(allocator, doc_result);
+                try r.docs.append(ctx.run_arena, doc_result);
             },
         }
     }
@@ -355,7 +342,7 @@ pub fn run(
     }
 
     if (format == .json) {
-        try writeResultsJson(allocator, stdout_w, &json_result);
+        try writeResultsJson(ctx.run_arena, stdout_w, &json_result);
     }
 
     return switch (format) {
@@ -364,31 +351,42 @@ pub fn run(
     };
 }
 
+/// True if `file_path` is exactly `prefix` or a proper subpath (next byte is a path separator). Avoids `src/auth` matching `src/authz`.
+fn filePathMatchesChangedPrefix(file_path: []const u8, prefix: []const u8) bool {
+    if (prefix.len == 0) return true;
+    if (!std.mem.startsWith(u8, file_path, prefix)) return false;
+    if (file_path.len == prefix.len) return true;
+    return std.fs.path.isSep(file_path[prefix.len]);
+}
+
 fn docMatchesChangedPath(doc: lockfile.DocBindings, changed_prefix: []const u8) bool {
     for (doc.bindings.items) |binding| {
         const parsed = parseTarget(binding.target, null);
-        if (std.mem.startsWith(u8, parsed.file_path, changed_prefix)) return true;
+        if (filePathMatchesChangedPrefix(parsed.file_path, changed_prefix)) return true;
     }
     return false;
 }
 
 fn normalizeChangedPrefix(
-    allocator: std.mem.Allocator,
+    ctx: CommandContext,
     root_path: []const u8,
     cwd_path: []const u8,
     raw_path: []const u8,
 ) ![]const u8 {
     if (std.fs.path.isAbsolute(raw_path)) {
-        return try std.fs.path.relative(allocator, root_path, raw_path);
+        return try std.fs.path.relative(ctx.run_arena, root_path, raw_path);
     }
 
-    const absolute = try std.fs.path.resolve(allocator, &.{ cwd_path, raw_path });
-    defer allocator.free(absolute);
-    return try std.fs.path.relative(allocator, root_path, absolute);
+    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, raw_path });
+    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    ctx.resetScratch();
+    return relative;
 }
 
 fn checkBinding(
-    allocator: std.mem.Allocator,
+    ctx: CommandContext,
+    format: Format,
+    parser_cache: *symbols.ParserCache,
     root_path: []const u8,
     binding: *const lockfile.Binding,
     file_cache: *FileCache,
@@ -397,8 +395,7 @@ fn checkBinding(
     const sig_hex = binding.fieldValue("sig") orelse return .{ .result = .stale, .reason_code = .baseline_unavailable };
 
     const parsed = parseTarget(binding.target, sig_hex);
-    const absolute_path = try std.fs.path.join(allocator, &.{ root_path, parsed.file_path });
-    defer allocator.free(absolute_path);
+    const absolute_path = try std.fs.path.join(ctx.scratch(), &.{ root_path, parsed.file_path });
 
     const current_content = file_cache.getCurrent(absolute_path) catch {
         return .{ .result = .stale, .reason_code = .file_not_readable };
@@ -409,13 +406,13 @@ fn checkBinding(
     if (parsed.symbol_name) |sym| {
         const ext = std.fs.path.extension(parsed.file_path);
         if (symbols.languageForExtension(ext)) |lang_query| {
-            if (!symbols.resolveSymbolWithTreeSitter(current_content, lang_query, sym)) {
+            if (!symbols.resolveSymbolWithTreeSitterCached(parser_cache, current_content, lang_query, sym)) {
                 return .{ .result = .stale, .reason_code = .symbol_not_found };
             }
         }
     }
 
-    const fingerprint = symbols.computeFingerprint(current_content, parsed.file_path, parsed.symbol_name) orelse {
+    const fingerprint = symbols.computeFingerprintCached(parser_cache, current_content, parsed.file_path, parsed.symbol_name) orelse {
         return .{ .result = .stale, .reason_code = .fingerprint_unavailable };
     };
 
@@ -425,20 +422,17 @@ fn checkBinding(
         return .{ .result = .fresh, .reason_code = .none };
     }
 
-    const blame = vcs.getLatestBlameInfo(allocator, root_path, parsed.file_path, detected_vcs) catch null;
+    const blame_strings = if (format == .json) ctx.run_arena else ctx.scratch();
+    const blame = try vcs.getLatestBlameInfo(blame_strings, ctx.scratch(), root_path, parsed.file_path, detected_vcs);
     return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
 }
 
 fn textEmitAnchor(
-    allocator: std.mem.Allocator,
     stdout_w: *std.io.Writer,
     origin: ?[]const u8,
     target: []const u8,
     outcome: AnchorOutcome,
 ) void {
-    const blame_owned = outcome.blame;
-    defer if (blame_owned) |b| b.deinit(allocator);
-
     switch (outcome.result) {
         .stale => {
             const msg = reasonMessage(outcome.reason_code);
@@ -447,7 +441,7 @@ fn textEmitAnchor(
             } else {
                 stdout_w.print("  STALE   {s}\n", .{target}) catch {};
             }
-            if (blame_owned) |blame| {
+            if (outcome.blame) |blame| {
                 stdout_w.print("          changed by {s} in {s} ({s})\n", .{ blame.author, blame.commit_hash, blame.date }) catch {};
                 stdout_w.print("          \"{s}\"\n", .{blame.subject}) catch {};
             }
@@ -463,10 +457,8 @@ fn textEmitAnchor(
     }
 }
 
-fn writeResultsJson(allocator: std.mem.Allocator, w: *std.io.Writer, result: *const CheckResult) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const doc = try checkResultToDriftCheckV1(arena.allocator(), result);
+fn writeResultsJson(run_alloc: std.mem.Allocator, w: *std.io.Writer, result: *const CheckResult) !void {
+    const doc = try checkResultToDriftCheckV1(run_alloc, result);
     try drift_check_v1.writeJson(w, doc);
 }
 
