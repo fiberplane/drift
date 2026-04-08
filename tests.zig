@@ -1,5 +1,6 @@
 test {
     _ = @import("src/main.zig");
+    _ = @import("src/lockfile.zig");
     _ = @import("test/payload_validate_test.zig");
 
     // Integration tests
