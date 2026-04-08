@@ -53,22 +53,22 @@ fn parseFormat(maybe_value: ?[]const u8, stderr_w: *std.Io.Writer) !lint.Format 
 }
 
 const link_params = clap.parseParamsComptime(
-    \\<spec>
+    \\<doc>
     \\
 );
 
 const link_parsers = .{
-    .spec = clap.parsers.string,
+    .doc = clap.parsers.string,
 };
 
 const unlink_params = clap.parseParamsComptime(
-    \\<spec>
+    \\<doc>
     \\<anchor>
     \\
 );
 
 const unlink_parsers = .{
-    .spec = clap.parsers.string,
+    .doc = clap.parsers.string,
     .anchor = clap.parsers.string,
 };
 
@@ -165,35 +165,35 @@ pub fn main() !void {
         .link => {
             var sub = try parseExOrReport(&link_params, link_parsers, allocator, &diag, &stderr_w.interface, &iter, 0);
             defer sub.deinit();
-            const spec_path = sub.positionals[0] orelse {
-                stderr_w.interface.print("usage: drift link <spec-path> [anchor]\n", .{}) catch {};
+            const doc_path = sub.positionals[0] orelse {
+                stderr_w.interface.print("usage: drift link <doc-path> [anchor]\n", .{}) catch {};
                 return error.MissingArguments;
             };
             const optional_anchor = iter.next();
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift link <spec-path> [anchor]\n", .{}) catch {};
+                stderr_w.interface.print("usage: drift link <doc-path> [anchor]\n", .{}) catch {};
                 return error.InvalidArgument;
             }
-            link.run(allocator, &stdout_w.interface, &stderr_w.interface, spec_path, optional_anchor) catch |err| {
+            link.run(allocator, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "link", err);
             };
         },
         .unlink => {
             var sub = try parseExOrReport(&unlink_params, unlink_parsers, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
-            const spec_path = sub.positionals[0] orelse {
-                stderr_w.interface.print("usage: drift unlink <spec-path> <anchor>\n", .{}) catch {};
+            const doc_path = sub.positionals[0] orelse {
+                stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
                 return error.MissingArguments;
             };
             const anchor = sub.positionals[1] orelse {
-                stderr_w.interface.print("usage: drift unlink <spec-path> <anchor>\n", .{}) catch {};
+                stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
                 return error.MissingArguments;
             };
             if (iter.next()) |_| {
-                stderr_w.interface.print("usage: drift unlink <spec-path> <anchor>\n", .{}) catch {};
+                stderr_w.interface.print("usage: drift unlink <doc-path> <anchor>\n", .{}) catch {};
                 return error.InvalidArgument;
             }
-            unlink.run(allocator, &stdout_w.interface, &stderr_w.interface, spec_path, anchor) catch |err| {
+            unlink.run(allocator, &stdout_w.interface, &stderr_w.interface, doc_path, anchor) catch |err| {
                 exitWithCommandError(&stderr_w.interface, "unlink", err);
             };
         },
@@ -216,16 +216,16 @@ pub fn main() !void {
 
 fn printUsage(w: *std.io.Writer) void {
     w.print(
-        \\drift — bind specs to code, lint for drift
+        \\drift — bind docs to code, lint for drift
         \\
         \\Usage: drift <command> [options]
         \\
         \\Commands:
-        \\  check     Check all specs for staleness  [--format text|json] [--changed <path>]
-        \\  status    Show all specs and their anchors  [--format text|json]
-        \\  link      Add anchors to a spec
-        \\  unlink    Remove anchors from a spec
-        \\  refs      Show which specs reference a target
+        \\  check     Check all docs for staleness  [--format text|json] [--changed <path>]
+        \\  status    Show all docs and their anchors  [--format text|json]
+        \\  link      Add anchors to a doc
+        \\  unlink    Remove anchors from a doc
+        \\  refs      Show which docs reference a target
         \\
         \\Options:
         \\  -h, --help     Show this help message

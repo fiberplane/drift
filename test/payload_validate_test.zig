@@ -9,19 +9,19 @@ fn docWithSummary(summary: payload.Summary) payload.DriftCheckV1 {
         .repo = null,
         .checked_at_ms = 0,
         .summary = summary,
-        .specs = &.{},
+        .docs = &.{},
     };
 }
 
-test "validateJsonDocument rejects verification_state full when specs_skipped nonzero" {
+test "validateJsonDocument rejects verification_state full when docs_skipped nonzero" {
     try std.testing.expectError(error.BadDriftCheckPayload, payload.validateJsonDocument(docWithSummary(.{
         .result = "pass",
         .verification_state = "full",
-        .specs_total = 1,
-        .specs_checked = 0,
-        .specs_skipped = 1,
-        .specs_fresh = 0,
-        .specs_stale = 0,
+        .docs_total = 1,
+        .docs_checked = 0,
+        .docs_skipped = 1,
+        .docs_fresh = 0,
+        .docs_stale = 0,
         .anchors_total = 0,
         .anchors_fresh = 0,
         .anchors_stale = 0,
@@ -29,15 +29,15 @@ test "validateJsonDocument rejects verification_state full when specs_skipped no
     })));
 }
 
-test "validateJsonDocument rejects verification_state none when specs_total zero" {
+test "validateJsonDocument rejects verification_state none when docs_total zero" {
     try std.testing.expectError(error.BadDriftCheckPayload, payload.validateJsonDocument(docWithSummary(.{
         .result = "pass",
         .verification_state = "none",
-        .specs_total = 0,
-        .specs_checked = 0,
-        .specs_skipped = 0,
-        .specs_fresh = 0,
-        .specs_stale = 0,
+        .docs_total = 0,
+        .docs_checked = 0,
+        .docs_skipped = 0,
+        .docs_fresh = 0,
+        .docs_stale = 0,
         .anchors_total = 0,
         .anchors_fresh = 0,
         .anchors_stale = 0,
@@ -49,11 +49,11 @@ test "validateJsonDocument rejects verification_state partial when nothing skipp
     try std.testing.expectError(error.BadDriftCheckPayload, payload.validateJsonDocument(docWithSummary(.{
         .result = "pass",
         .verification_state = "partial",
-        .specs_total = 1,
-        .specs_checked = 1,
-        .specs_skipped = 0,
-        .specs_fresh = 1,
-        .specs_stale = 0,
+        .docs_total = 1,
+        .docs_checked = 1,
+        .docs_skipped = 0,
+        .docs_fresh = 1,
+        .docs_stale = 0,
         .anchors_total = 0,
         .anchors_fresh = 0,
         .anchors_stale = 0,
@@ -61,15 +61,15 @@ test "validateJsonDocument rejects verification_state partial when nothing skipp
     })));
 }
 
-test "validateJsonDocument accepts verification_state full with zero specs" {
+test "validateJsonDocument accepts verification_state full with zero docs" {
     try payload.validateJsonDocument(docWithSummary(.{
         .result = "pass",
         .verification_state = "full",
-        .specs_total = 0,
-        .specs_checked = 0,
-        .specs_skipped = 0,
-        .specs_fresh = 0,
-        .specs_stale = 0,
+        .docs_total = 0,
+        .docs_checked = 0,
+        .docs_skipped = 0,
+        .docs_fresh = 0,
+        .docs_stale = 0,
         .anchors_total = 0,
         .anchors_fresh = 0,
         .anchors_stale = 0,

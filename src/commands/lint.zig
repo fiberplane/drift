@@ -64,7 +64,7 @@ const ReasonCode = enum {
 fn reasonMessage(code: ReasonCode) []const u8 {
     return switch (code) {
         .none => "",
-        .changed_after_baseline => "changed after spec",
+        .changed_after_baseline => "changed after doc",
         .file_not_found => "file not found",
         .file_not_readable => "file not readable",
         .symbol_not_found => "symbol not found",
@@ -91,13 +91,13 @@ const JsonAnchorRow = struct {
     }
 };
 
-const SpecCheckResult = struct {
+const DocCheckResult = struct {
     path: []const u8,
     origin: ?[]const u8,
     result: AnchorResult,
     anchors: std.ArrayList(JsonAnchorRow),
 
-    fn deinit(self: *SpecCheckResult, allocator: std.mem.Allocator) void {
+    fn deinit(self: *DocCheckResult, allocator: std.mem.Allocator) void {
         for (self.anchors.items) |*a| a.deinit(allocator);
         self.anchors.deinit(allocator);
     }
@@ -106,30 +106,30 @@ const SpecCheckResult = struct {
 const CheckResult = struct {
     repo: ?[]const u8,
     checked_at_ms: i64,
-    specs: std.ArrayList(SpecCheckResult),
+    docs: std.ArrayList(DocCheckResult),
     summary_result: AnchorResult,
-    specs_total: u32,
-    specs_fresh: u32,
-    specs_stale: u32,
-    specs_skipped: u32,
+    docs_total: u32,
+    docs_fresh: u32,
+    docs_stale: u32,
+    docs_skipped: u32,
     anchors_total: u32,
     anchors_fresh: u32,
     anchors_stale: u32,
     anchors_skipped: u32,
 
     fn deinit(self: *CheckResult, allocator: std.mem.Allocator) void {
-        for (self.specs.items) |*s| s.deinit(allocator);
-        self.specs.deinit(allocator);
+        for (self.docs.items) |*s| s.deinit(allocator);
+        self.docs.deinit(allocator);
     }
 
     fn specsChecked(self: *const CheckResult) u32 {
-        return self.specs_fresh + self.specs_stale;
+        return self.docs_fresh + self.docs_stale;
     }
 
     fn verificationState(self: *const CheckResult) []const u8 {
         const checked = self.specsChecked();
-        if (self.specs_total > 0 and checked == 0) return "none";
-        if (checked > 0 and self.specs_skipped > 0) return "partial";
+        if (self.docs_total > 0 and checked == 0) return "none";
+        if (checked > 0 and self.docs_skipped > 0) return "partial";
         return "full";
     }
 };
@@ -220,10 +220,10 @@ pub fn run(
     var lf = try lockfile.discover(allocator, cwd_path);
     defer lf.deinit(allocator);
 
-    var spec_groups = try lockfile.groupBySpec(allocator, lf.bindings.items);
+    var doc_groups = try lockfile.groupByDoc(allocator, lf.bindings.items);
     defer {
-        for (spec_groups.items) |*spec| spec.deinit(allocator);
-        spec_groups.deinit(allocator);
+        for (doc_groups.items) |*doc| doc.deinit(allocator);
+        doc_groups.deinit(allocator);
     }
 
     const detected_vcs = vcs.detectVcs();
@@ -247,12 +247,12 @@ pub fn run(
         json_result = .{
             .repo = repo_identity,
             .checked_at_ms = std.time.milliTimestamp(),
-            .specs = .{},
+            .docs = .{},
             .summary_result = .fresh,
-            .specs_total = 0,
-            .specs_fresh = 0,
-            .specs_stale = 0,
-            .specs_skipped = 0,
+            .docs_total = 0,
+            .docs_fresh = 0,
+            .docs_stale = 0,
+            .docs_skipped = 0,
             .anchors_total = 0,
             .anchors_fresh = 0,
             .anchors_stale = 0,
@@ -267,29 +267,29 @@ pub fn run(
     };
 
     var checked_any = false;
-    for (spec_groups.items) |spec| {
+    for (doc_groups.items) |doc| {
         if (normalized_changed) |prefix| {
-            if (!specMatchesChangedPath(spec, prefix)) continue;
+            if (!docMatchesChangedPath(doc, prefix)) continue;
         }
         checked_any = true;
         switch (sink) {
-            .text => |ts| ts.writer.print("{s}\n", .{spec.path}) catch {},
+            .text => |ts| ts.writer.print("{s}\n", .{doc.path}) catch {},
             .json => {},
         }
 
-        var spec_result = SpecCheckResult{
-            .path = spec.path,
+        var doc_result = DocCheckResult{
+            .path = doc.path,
             .origin = null,
             .result = .fresh,
             .anchors = .{},
         };
-        errdefer spec_result.deinit(allocator);
+        errdefer doc_result.deinit(allocator);
 
         var fresh_count: usize = 0;
         var stale_count: usize = 0;
         var skip_count: usize = 0;
 
-        for (spec.bindings.items) |binding| {
+        for (doc.bindings.items) |binding| {
             const origin = binding.fieldValue("origin");
             const sig = binding.fieldValue("sig");
             const parsed = parseTarget(binding.target, sig);
@@ -307,7 +307,7 @@ pub fn run(
 
             switch (sink) {
                 .text => |ts| textEmitAnchor(allocator, ts.writer, origin, binding.target, outcome),
-                .json => try spec_result.anchors.append(allocator, jsonAnchorFromOutcome(binding.target, parsed, outcome)),
+                .json => try doc_result.anchors.append(allocator, jsonAnchorFromOutcome(binding.target, parsed, outcome)),
             }
 
             switch (outcome.result) {
@@ -317,7 +317,7 @@ pub fn run(
             }
         }
 
-        spec_result.result = if (stale_count > 0)
+        doc_result.result = if (stale_count > 0)
             .stale
         else if (skip_count > 0 and fresh_count == 0)
             .skip
@@ -332,20 +332,20 @@ pub fn run(
                 if (stale_count > 0) ts.summary_stale = true;
             },
             .json => |r| {
-                r.specs_total += 1;
-                r.anchors_total += @intCast(spec.bindings.items.len);
+                r.docs_total += 1;
+                r.anchors_total += @intCast(doc.bindings.items.len);
                 r.anchors_fresh += @intCast(fresh_count);
                 r.anchors_stale += @intCast(stale_count);
                 r.anchors_skipped += @intCast(skip_count);
-                switch (spec_result.result) {
-                    .fresh => r.specs_fresh += 1,
+                switch (doc_result.result) {
+                    .fresh => r.docs_fresh += 1,
                     .stale => {
-                        r.specs_stale += 1;
+                        r.docs_stale += 1;
                         r.summary_result = .stale;
                     },
-                    .skip => r.specs_skipped += 1,
+                    .skip => r.docs_skipped += 1,
                 }
-                try r.specs.append(allocator, spec_result);
+                try r.docs.append(allocator, doc_result);
             },
         }
     }
@@ -364,8 +364,8 @@ pub fn run(
     };
 }
 
-fn specMatchesChangedPath(spec: lockfile.SpecBindings, changed_prefix: []const u8) bool {
-    for (spec.bindings.items) |binding| {
+fn docMatchesChangedPath(doc: lockfile.DocBindings, changed_prefix: []const u8) bool {
+    for (doc.bindings.items) |binding| {
         const parsed = parseTarget(binding.target, null);
         if (std.mem.startsWith(u8, parsed.file_path, changed_prefix)) return true;
     }
@@ -471,8 +471,8 @@ fn writeResultsJson(allocator: std.mem.Allocator, w: *std.io.Writer, result: *co
 }
 
 fn checkResultToDriftCheckV1(arena: std.mem.Allocator, result: *const CheckResult) !drift_check_v1.DriftCheckV1 {
-    const specs = try arena.alloc(drift_check_v1.Spec, result.specs.items.len);
-    for (result.specs.items, specs) |s, *sp| {
+    const docs = try arena.alloc(drift_check_v1.Doc, result.docs.items.len);
+    for (result.docs.items, docs) |s, *sp| {
         const anchors = try arena.alloc(drift_check_v1.Anchor, s.anchors.items.len);
         for (s.anchors.items, anchors) |row, *ap| {
             ap.* = row.wire;
@@ -491,7 +491,7 @@ fn checkResultToDriftCheckV1(arena: std.mem.Allocator, result: *const CheckResul
         .repo = result.repo,
         .checked_at_ms = result.checked_at_ms,
         .summary = checkResultSummaryWire(result),
-        .specs = specs,
+        .docs = docs,
     };
 }
 
@@ -499,11 +499,11 @@ fn checkResultSummaryWire(result: *const CheckResult) drift_check_v1.Summary {
     return .{
         .result = if (result.summary_result == .stale) "fail" else "pass",
         .verification_state = result.verificationState(),
-        .specs_total = result.specs_total,
-        .specs_checked = result.specsChecked(),
-        .specs_skipped = result.specs_skipped,
-        .specs_fresh = result.specs_fresh,
-        .specs_stale = result.specs_stale,
+        .docs_total = result.docs_total,
+        .docs_checked = result.specsChecked(),
+        .docs_skipped = result.docs_skipped,
+        .docs_fresh = result.docs_fresh,
+        .docs_stale = result.docs_stale,
         .anchors_total = result.anchors_total,
         .anchors_fresh = result.anchors_fresh,
         .anchors_stale = result.anchors_stale,

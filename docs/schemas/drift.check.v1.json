@@ -12,7 +12,7 @@
     "repo",
     "checked_at_ms",
     "summary",
-    "specs"
+    "docs"
   ],
   "properties": {
     "schema_version": {
@@ -41,11 +41,11 @@
     "summary": {
       "$ref": "#/$defs/summary"
     },
-    "specs": {
+    "docs": {
       "type": "array",
-      "description": "Discovered specs in scanner order.",
+      "description": "Discovered docs in scanner order.",
       "items": {
-        "$ref": "#/$defs/spec"
+        "$ref": "#/$defs/doc"
       }
     }
   },
@@ -56,11 +56,11 @@
       "required": [
         "result",
         "verification_state",
-        "specs_total",
-        "specs_checked",
-        "specs_skipped",
-        "specs_fresh",
-        "specs_stale",
+        "docs_total",
+        "docs_checked",
+        "docs_skipped",
+        "docs_fresh",
+        "docs_stale",
         "anchors_total",
         "anchors_fresh",
         "anchors_stale",
@@ -82,26 +82,26 @@
             "partial",
             "full"
           ],
-          "description": "Coverage of verification: none = all specs skipped; partial = mix; full = nothing skipped (including zero specs)."
+          "description": "Coverage of verification: none = all docs skipped; partial = mix; full = nothing skipped (including zero docs)."
         },
-        "specs_total": {
+        "docs_total": {
           "type": "integer",
           "minimum": 0
         },
-        "specs_checked": {
+        "docs_checked": {
           "type": "integer",
           "minimum": 0,
-          "description": "specs_fresh + specs_stale (specs not skipped)."
+          "description": "docs_fresh + docs_stale (docs not skipped)."
         },
-        "specs_skipped": {
+        "docs_skipped": {
           "type": "integer",
           "minimum": 0
         },
-        "specs_fresh": {
+        "docs_fresh": {
           "type": "integer",
           "minimum": 0
         },
-        "specs_stale": {
+        "docs_stale": {
           "type": "integer",
           "minimum": 0
         },
@@ -123,7 +123,7 @@
         }
       }
     },
-    "spec": {
+    "doc": {
       "type": "object",
       "additionalProperties": true,
       "required": [
@@ -137,7 +137,7 @@
           "type": "string"
         },
         "origin": {
-          "description": "Spec drift.origin frontmatter when present.",
+          "description": "Doc drift.origin frontmatter when present.",
           "type": [
             "string",
             "null"
@@ -181,7 +181,7 @@
         },
         "raw": {
           "type": "string",
-          "description": "Full anchor string from the spec."
+          "description": "Full anchor string from the doc."
         },
         "kind": {
           "type": "string",

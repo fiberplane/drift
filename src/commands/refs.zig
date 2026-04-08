@@ -26,9 +26,9 @@ pub fn run(
 
     for (lf.bindings.items) |binding| {
         if (!std.mem.eql(u8, binding.target, normalized_target)) continue;
-        if (printed.contains(binding.spec_path)) continue;
-        try printed.put(binding.spec_path, {});
-        stdout_w.print("{s}\n", .{binding.spec_path}) catch {};
+        if (printed.contains(binding.doc_path)) continue;
+        try printed.put(binding.doc_path, {});
+        stdout_w.print("{s}\n", .{binding.doc_path}) catch {};
     }
 }
 

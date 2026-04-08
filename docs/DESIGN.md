@@ -2,17 +2,17 @@
 
 ## Problem
 
-Specs and code drift apart. Documentation describes intent, code implements it, and over time the two diverge silently. In agent-driven workflows this is acute: agents change code without updating specs, and stale specs produce stale prompts that produce wrong code.
+Docs and code drift apart. Documentation describes intent, code implements it, and over time the two diverge silently. In agent-driven workflows this is acute: agents change code without updating docs, and stale docs produce stale prompts that produce wrong code.
 
 ## Solution
 
-drift makes the anchor between specs and code explicit and enforceable. Any markdown file can declare which code it governs. When that code changes, `drift lint` flags the spec as stale. The lint runs as a CI gate or pre-commit hook — agents that change code must update the specs they affect.
+drift makes the anchor between docs and code explicit and enforceable. Any markdown file can declare which code it governs. When that code changes, `drift lint` flags the doc as stale. The lint runs as a CI gate or pre-commit hook — agents that change code must update the docs they affect.
 
 ## Data Model
 
-### Spec
+### Doc
 
-A spec is any markdown file with entries in `drift.lock`. Specs are pure markdown — no frontmatter, no HTML comments, no inline markers. A file becomes a drift spec by having at least one binding in the lockfile.
+A doc is any markdown file with entries in `drift.lock`. Docs are pure markdown — no frontmatter, no HTML comments, no inline markers. A file becomes a drift doc by having at least one binding in the lockfile.
 
 ```markdown
 # Auth Architecture
@@ -23,18 +23,18 @@ Provider selection happens at startup based on environment.
 <!-- depends: docs/project.md -->
 ```
 
-The spec itself contains no drift metadata. All bindings between specs and code live in `drift.lock` at the repo root.
+The doc itself contains no drift metadata. All bindings between docs and code live in `drift.lock` at the repo root.
 
 ### Anchors
 
-An anchor is a declared relationship between a spec and a code artifact. Anchors are stored as lines in `drift.lock`, not in the spec files.
+An anchor is a declared relationship between a doc and a code artifact. Anchors are stored as lines in `drift.lock`, not in the doc files.
 
 ```
 docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890
 docs/auth.md -> src/auth/provider.ts#AuthConfig sig:1a2b3c4d5e6f7890
 ```
 
-Each line is a binding: a spec path, an arrow separator, a target path (optionally with `#Symbol`), and trailing key:value metadata. The `sig:` field records a content signature — a normalized fingerprint of the target at the time the anchor was last verified.
+Each line is a binding: a doc path, an arrow separator, a target path (optionally with `#Symbol`), and trailing key:value metadata. The `sig:` field records a content signature — a normalized fingerprint of the target at the time the anchor was last verified.
 
 Anchors can be file-level (`src/auth/login.ts`) or symbol-level (`src/auth/provider.ts#AuthConfig`). Bare targets without a `sig:` field are valid — they declare a binding without provenance.
 
@@ -50,7 +50,7 @@ docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890 origin:github:fiberplane/
 
 When `drift lint` runs, it resolves the current repo's identity from `git remote get-url origin` and normalizes it to `github:owner/repo` format. If an anchor's `origin:` doesn't match the current repo, it is reported as `SKIP` — it belongs to a different repository and can't be checked locally.
 
-This lets specs travel across repo boundaries (vendored docs, shared skill files, monorepo imports) without producing false STALE reports. Anchors without an `origin:` field are always checked — origin qualification is opt-in.
+This lets docs travel across repo boundaries (vendored docs, shared skill files, monorepo imports) without producing false STALE reports. Anchors without an `origin:` field are always checked — origin qualification is opt-in.
 
 ### Symbol-Level Anchors
 
@@ -74,7 +74,7 @@ If the symbol is not found, the anchor is reported as STALE with reason "symbol 
 
 ### Dependencies
 
-Specs can depend on other specs via `<!-- depends: path/to/other.md -->` comments. This declares that one spec builds on another's context. Dependencies are used for DAG ordering when composing prompts (future), not for staleness detection.
+Docs can depend on other docs via `<!-- depends: path/to/other.md -->` comments. This declares that one doc builds on another's context. Dependencies are used for DAG ordering when composing prompts (future), not for staleness detection.
 
 ## Staleness Detection
 
@@ -96,11 +96,11 @@ Content signatures are VCS-independent — they work in fresh clones, shallow cl
 
 File reads are cached per lint run (`FileCache` in `main.zig`). When multiple anchors reference the same file, the content is read once.
 
-Because provenance is per-anchor, updating one anchor's signature doesn't affect staleness detection for other anchors in the same spec. A spec with three anchors can have two fresh and one stale.
+Because provenance is per-anchor, updating one anchor's signature doesn't affect staleness detection for other anchors in the same doc. A doc with three anchors can have two fresh and one stale.
 
 ### Blame Enrichment
 
-When a spec is stale, the lint output includes who changed the bound code:
+When a doc is stale, the lint output includes who changed the bound code:
 
 ```
 docs/auth.md
@@ -166,14 +166,14 @@ Additional modules:
 - `markdown.zig` — markdown-aware utilities: fenced code / inline code detection, frontmatter boundary parsing
 - `main.zig` — CLI entry point, argument parsing, subcommand dispatch
 - `commands/lint.zig` — lint engine: file/content caching, anchor staleness checks, report formatting
-- `commands/status.zig` — spec listing in text and JSON formats
+- `commands/status.zig` — doc listing in text and JSON formats
 - `commands/link.zig` — anchor linking with auto-provenance (content signatures)
 - `commands/unlink.zig` — anchor removal from lockfile
-- `commands/refs.zig` — reverse lookup: which specs reference a given target
+- `commands/refs.zig` — reverse lookup: which docs reference a given target
 
 ### lockfile.zig
 
-Reads and writes `drift.lock`. The file is line-oriented: each non-blank, non-comment line is a binding in the format `<spec> -> <target> <key:value>...`. Parsing is two splits: `splitSequence(" -> ")` for the spec/rest boundary, then `splitScalar(' ')` for target and trailing key:value pairs. Writing sorts all lines lexically and appends a trailing newline.
+Reads and writes `drift.lock`. The file is line-oriented: each non-blank, non-comment line is a binding in the format `<doc> -> <target> <key:value>...`. Parsing is two splits: `splitSequence(" -> ")` for the doc/rest boundary, then `splitScalar(' ')` for target and trailing key:value pairs. Writing sorts all lines lexically and appends a trailing newline.
 
 Discovery: walks up from cwd checking for `drift.lock` at each directory. The lockfile's directory becomes the project root for resolving relative paths.
 
@@ -184,7 +184,7 @@ For each anchor, resolves the current state:
 - **File-level**: stat the file, hash its content
 - **Symbol-level**: parse with tree-sitter, find the symbol via `.scm` query, hash a normalized syntax fingerprint of the symbol
 
-Parsing is on-demand. Only files that are actually bound get parsed. A lint run that checks 10 specs anchoring to 30 symbols across 20 files does 20 tree-sitter parses — milliseconds.
+Parsing is on-demand. Only files that are actually bound get parsed. A lint run that checks 10 docs anchoring to 30 symbols across 20 files does 20 tree-sitter parses — milliseconds.
 
 ### vcs.zig
 
@@ -201,7 +201,7 @@ No libgit2, no jj library. `GitCatFile` keeps a single `git cat-file --batch` pr
 
 ### drift.lock
 
-The lockfile is a flat, line-oriented file at the repo root. Every binding between a spec and a code target is one line.
+The lockfile is a flat, line-oriented file at the repo root. Every binding between a doc and a code target is one line.
 
 ```
 # drift.lock — managed by drift, do not edit manually
@@ -211,7 +211,7 @@ docs/payments.md -> src/payments/stripe.ts sig:9a8b7c6d5e4f3210
 ```
 
 Format rules:
-- One binding per line: `<spec> -> <target> <key:value>...`
+- One binding per line: `<doc> -> <target> <key:value>...`
 - Sorted lexically by full line content
 - Trailing key:value pairs for extensible metadata (`sig:`, `origin:`, future fields)
 - Lines starting with `#` are comments, blank lines ignored

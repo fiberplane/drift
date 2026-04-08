@@ -1,7 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers");
 
-test "status shows spec with its bindings from drift.lock" {
+test "status shows doc with its bindings from drift.lock" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -18,7 +18,7 @@ test "status shows spec with its bindings from drift.lock" {
     try helpers.expectContains(result.stdout, "src/auth/provider.ts#Provider");
 }
 
-test "status shows no specs when lockfile is missing" {
+test "status shows no docs when lockfile is missing" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -38,14 +38,14 @@ test "status format json outputs valid escaped json" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("drift.lock", "docs/spec\"name.md -> src/main\"file.ts sig:aaaa\n");
+    try repo.writeFile("drift.lock", "docs/doc\"name.md -> src/main\"file.ts sig:aaaa\n");
     try repo.commit("add lockfile with quoted paths");
 
     const result = try repo.runDrift(&.{ "status", "--format", "json" });
     defer result.deinit(allocator);
 
     const StatusEntry = struct {
-        spec: []const u8,
+        doc: []const u8,
         files: []const []const u8,
     };
 
@@ -53,7 +53,7 @@ test "status format json outputs valid escaped json" {
     defer parsed.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), parsed.value.len);
-    try std.testing.expectEqualStrings("docs/spec\"name.md", parsed.value[0].spec);
+    try std.testing.expectEqualStrings("docs/doc\"name.md", parsed.value[0].doc);
     try std.testing.expectEqual(@as(usize, 1), parsed.value[0].files.len);
     try std.testing.expectEqualStrings("src/main\"file.ts", parsed.value[0].files[0]);
 }

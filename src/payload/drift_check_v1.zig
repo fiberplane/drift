@@ -10,24 +10,24 @@ pub const DriftCheckV1 = struct {
     repo: ?[]const u8,
     checked_at_ms: i64,
     summary: Summary,
-    specs: []const Spec,
+    docs: []const Doc,
 };
 
 pub const Summary = struct {
     result: []const u8,
     verification_state: []const u8,
-    specs_total: u32,
-    specs_checked: u32,
-    specs_skipped: u32,
-    specs_fresh: u32,
-    specs_stale: u32,
+    docs_total: u32,
+    docs_checked: u32,
+    docs_skipped: u32,
+    docs_fresh: u32,
+    docs_stale: u32,
     anchors_total: u32,
     anchors_fresh: u32,
     anchors_stale: u32,
     anchors_skipped: u32,
 };
 
-pub const Spec = struct {
+pub const Doc = struct {
     path: []const u8,
     origin: ?[]const u8,
     result: []const u8,
@@ -79,8 +79,8 @@ pub fn validateJsonDocument(doc: DriftCheckV1) ValidateJsonError!void {
     if (doc.tool_version.len == 0) return error.BadDriftCheckPayload;
 
     try validateSummary(doc.summary);
-    for (doc.specs) |spec| {
-        try validateSpec(spec);
+    for (doc.docs) |d| {
+        try validateDoc(d);
     }
 }
 
@@ -88,31 +88,31 @@ fn validateSummary(s: Summary) ValidateJsonError!void {
     try oneOf(s.result, &.{ "pass", "fail" });
     try oneOf(s.verification_state, &.{ "none", "partial", "full" });
 
-    const spec_sum = @as(u64, s.specs_fresh) + @as(u64, s.specs_stale) + @as(u64, s.specs_skipped);
-    if (spec_sum != s.specs_total) return error.BadDriftCheckPayload;
-    const checked = @as(u64, s.specs_fresh) + @as(u64, s.specs_stale);
-    if (checked != s.specs_checked) return error.BadDriftCheckPayload;
+    const spec_sum = @as(u64, s.docs_fresh) + @as(u64, s.docs_stale) + @as(u64, s.docs_skipped);
+    if (spec_sum != s.docs_total) return error.BadDriftCheckPayload;
+    const checked = @as(u64, s.docs_fresh) + @as(u64, s.docs_stale);
+    if (checked != s.docs_checked) return error.BadDriftCheckPayload;
 
     const anchor_sum = @as(u64, s.anchors_fresh) + @as(u64, s.anchors_stale) + @as(u64, s.anchors_skipped);
     if (anchor_sum != s.anchors_total) return error.BadDriftCheckPayload;
 
     // Coverage label must match counts; see docs/check-json-schema.md (summary).
     if (std.mem.eql(u8, s.verification_state, "none")) {
-        if (s.specs_total == 0) return error.BadDriftCheckPayload;
-        if (s.specs_checked != 0) return error.BadDriftCheckPayload;
+        if (s.docs_total == 0) return error.BadDriftCheckPayload;
+        if (s.docs_checked != 0) return error.BadDriftCheckPayload;
     } else if (std.mem.eql(u8, s.verification_state, "partial")) {
-        if (s.specs_checked == 0) return error.BadDriftCheckPayload;
-        if (s.specs_skipped == 0) return error.BadDriftCheckPayload;
+        if (s.docs_checked == 0) return error.BadDriftCheckPayload;
+        if (s.docs_skipped == 0) return error.BadDriftCheckPayload;
     } else {
-        // "full" — nothing skipped (including specs_total == 0).
-        if (s.specs_skipped != 0) return error.BadDriftCheckPayload;
+        // "full" — nothing skipped (including docs_total == 0).
+        if (s.docs_skipped != 0) return error.BadDriftCheckPayload;
     }
 }
 
-fn validateSpec(spec: Spec) ValidateJsonError!void {
-    if (spec.path.len == 0) return error.BadDriftCheckPayload;
-    try oneOf(spec.result, &.{ "fresh", "stale", "skip" });
-    for (spec.anchors) |a| {
+fn validateDoc(doc: Doc) ValidateJsonError!void {
+    if (doc.path.len == 0) return error.BadDriftCheckPayload;
+    try oneOf(doc.result, &.{ "fresh", "stale", "skip" });
+    for (doc.anchors) |a| {
         try validateAnchor(a);
     }
 }

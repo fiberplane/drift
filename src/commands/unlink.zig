@@ -6,7 +6,7 @@ pub fn run(
     allocator: std.mem.Allocator,
     stdout_w: *std.io.Writer,
     stderr_w: *std.io.Writer,
-    spec_path: []const u8,
+    doc_path: []const u8,
     anchor: []const u8,
 ) !void {
     _ = stderr_w;
@@ -19,8 +19,8 @@ pub fn run(
 
     if (!lf.exists) return;
 
-    const normalized_spec_path = try normalizeSpecPath(allocator, lf.root_path, cwd_path, spec_path);
-    defer allocator.free(normalized_spec_path);
+    const normalized_doc_path = try normalizeSpecPath(allocator, lf.root_path, cwd_path, doc_path);
+    defer allocator.free(normalized_doc_path);
 
     const normalized_target = try normalizeTargetPath(allocator, lf.root_path, cwd_path, anchor);
     defer allocator.free(normalized_target);
@@ -29,7 +29,7 @@ pub fn run(
     var i: usize = 0;
     while (i < lf.bindings.items.len) {
         const binding = &lf.bindings.items[i];
-        if (std.mem.eql(u8, binding.spec_path, normalized_spec_path) and std.mem.eql(u8, binding.target, normalized_target)) {
+        if (std.mem.eql(u8, binding.doc_path, normalized_doc_path) and std.mem.eql(u8, binding.target, normalized_target)) {
             binding.deinit(allocator);
             _ = lf.bindings.orderedRemove(i);
             removed = true;
@@ -41,16 +41,16 @@ pub fn run(
     if (!removed) return;
 
     try lockfile.writeFile(&lf, allocator);
-    stdout_w.print("removed {s} -> {s} from drift.lock\n", .{ normalized_spec_path, normalized_target }) catch {};
+    stdout_w.print("removed {s} -> {s} from drift.lock\n", .{ normalized_doc_path, normalized_target }) catch {};
 }
 
 fn normalizeSpecPath(
     allocator: std.mem.Allocator,
     root_path: []const u8,
     cwd_path: []const u8,
-    spec_path: []const u8,
+    doc_path: []const u8,
 ) ![]const u8 {
-    const absolute = try resolveInputPath(allocator, root_path, cwd_path, spec_path);
+    const absolute = try resolveInputPath(allocator, root_path, cwd_path, doc_path);
     defer allocator.free(absolute);
     return try std.fs.path.relative(allocator, root_path, absolute);
 }

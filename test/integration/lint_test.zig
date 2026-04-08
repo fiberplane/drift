@@ -1,9 +1,9 @@
 const std = @import("std");
 const helpers = @import("helpers");
 
-fn linkSpec(repo: *helpers.TempRepo, spec_path: []const u8, target: []const u8) !void {
+fn linkDoc(repo: *helpers.TempRepo, doc_path: []const u8, target: []const u8) !void {
     const allocator = std.testing.allocator;
-    const result = try repo.runDrift(&.{ "link", spec_path, target });
+    const result = try repo.runDrift(&.{ "link", doc_path, target });
     defer result.deinit(allocator);
     try helpers.expectExitCode(result.term, 0);
 }
@@ -18,11 +18,11 @@ fn expectFormattingOnlyFileChangeIsFresh(
     defer repo.cleanup();
 
     try repo.writeFile(file_path, initial_source);
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add initial source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add initial source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", file_path);
-    try repo.commit("link spec to source file");
+    try linkDoc(&repo, "docs/doc.md", file_path);
+    try repo.commit("link doc to source file");
 
     try repo.writeFile(file_path, reformatted_source);
     try repo.commit("reformat source without syntax changes");
@@ -31,7 +31,7 @@ fn expectFormattingOnlyFileChangeIsFresh(
     defer check_result.deinit(allocator);
 
     try helpers.expectExitCode(check_result.term, 0);
-    try helpers.expectContains(check_result.stdout, "docs/spec.md");
+    try helpers.expectContains(check_result.stdout, "docs/doc.md");
     try helpers.expectContains(check_result.stdout, "ok");
     try helpers.expectNotContains(check_result.stdout, "STALE");
 }
@@ -47,11 +47,11 @@ fn expectFormattingOnlySymbolChangeIsFresh(
     defer repo.cleanup();
 
     try repo.writeFile(file_path, initial_source);
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add initial source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add initial source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", symbol_anchor);
-    try repo.commit("link spec to source symbol");
+    try linkDoc(&repo, "docs/doc.md", symbol_anchor);
+    try repo.commit("link doc to source symbol");
 
     try repo.writeFile(file_path, reformatted_source);
     try repo.commit("reformat source without syntax changes");
@@ -60,7 +60,7 @@ fn expectFormattingOnlySymbolChangeIsFresh(
     defer check_result.deinit(allocator);
 
     try helpers.expectExitCode(check_result.term, 0);
-    try helpers.expectContains(check_result.stdout, "docs/spec.md");
+    try helpers.expectContains(check_result.stdout, "docs/doc.md");
     try helpers.expectContains(check_result.stdout, "ok");
     try helpers.expectNotContains(check_result.stdout, "STALE");
 }
@@ -86,17 +86,17 @@ test "lint reports ok when linked file has not changed" {
     defer repo.cleanup();
 
     try repo.writeFile("src/main.ts", "export function main() {}\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
 
     const result = try repo.runDrift(&.{"lint"});
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
-    try helpers.expectContains(result.stdout, "docs/spec.md");
+    try helpers.expectContains(result.stdout, "docs/doc.md");
     try helpers.expectContains(result.stdout, "ok");
 }
 
@@ -106,11 +106,11 @@ test "lint reports stale when linked file changed after link" {
     defer repo.cleanup();
 
     try repo.writeFile("src/main.ts", "export function main() {}\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
 
     try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
     try repo.commit("modify source");
@@ -121,7 +121,7 @@ test "lint reports stale when linked file changed after link" {
     try helpers.expectExitCode(result.term, 1);
     try helpers.expectContains(result.stdout, "STALE");
     try helpers.expectContains(result.stdout, "src/main.ts");
-    try helpers.expectContains(result.stdout, "changed after spec");
+    try helpers.expectContains(result.stdout, "changed after doc");
 }
 
 test "lint reports stale when linked file does not exist" {
@@ -129,10 +129,10 @@ test "lint reports stale when linked file does not exist" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add doc");
 
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/missing.ts sig:deadbeefdeadbeef\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/missing.ts sig:deadbeefdeadbeef\n");
     try repo.commit("add missing binding");
 
     const result = try repo.runDrift(&.{"lint"});
@@ -149,11 +149,11 @@ test "lint reports stale for missing symbol anchor" {
     defer repo.cleanup();
 
     try repo.writeFile("src/lib.ts", "export function doStuff() { return 1; }\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/lib.ts#doStuff");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/lib.ts#doStuff");
+    try repo.commit("link doc");
 
     try repo.writeFile("src/lib.ts", "export const value = 1;\n");
     try repo.commit("remove symbol");
@@ -236,11 +236,11 @@ test "check still reports stale after typescript symbol token change" {
     defer repo.cleanup();
 
     try repo.writeFile("src/math.ts", "function add(a: number, b: number): number {\n  return a + b;\n}\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add initial source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add initial source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/math.ts#add");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/math.ts#add");
+    try repo.commit("link doc");
 
     try repo.writeFile("src/math.ts", "function add(a: number, b: number): number {\n  return a - b;\n}\n");
     try repo.commit("change symbol behavior");
@@ -259,11 +259,11 @@ test "lint includes blame info when linked file changed after link" {
     defer repo.cleanup();
 
     try repo.writeFile("src/main.ts", "export function main() {}\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
 
     try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
     try repo.commit("refactor: update main return value");
@@ -282,11 +282,11 @@ test "check --format json produces valid JSON with correct structure" {
     defer repo.cleanup();
 
     try repo.writeFile("src/main.ts", "export function main() {}\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
 
     const result = try repo.runDrift(&.{ "check", "--format", "json" });
     defer result.deinit(allocator);
@@ -298,12 +298,12 @@ test "check --format json produces valid JSON with correct structure" {
         tool: []const u8,
         summary: struct {
             result: []const u8,
-            specs_total: u32,
-            specs_checked: u32,
+            docs_total: u32,
+            docs_checked: u32,
             anchors_total: u32,
             anchors_fresh: u32,
         },
-        specs: []const struct {
+        docs: []const struct {
             path: []const u8,
             result: []const u8,
             anchors: []const struct {
@@ -322,16 +322,16 @@ test "check --format json produces valid JSON with correct structure" {
     try std.testing.expectEqualStrings("drift.check.v1", parsed.value.schema_version);
     try std.testing.expectEqualStrings("drift", parsed.value.tool);
     try std.testing.expectEqualStrings("pass", parsed.value.summary.result);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_total);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_checked);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_total);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_checked);
     try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.anchors_total);
     try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.anchors_fresh);
-    try std.testing.expectEqualStrings("docs/spec.md", parsed.value.specs[0].path);
-    try std.testing.expectEqualStrings("fresh", parsed.value.specs[0].result);
-    try std.testing.expectEqualStrings("src/main.ts", parsed.value.specs[0].anchors[0].identity);
-    try std.testing.expectEqualStrings("file", parsed.value.specs[0].anchors[0].kind);
-    try std.testing.expectEqualStrings("fresh", parsed.value.specs[0].anchors[0].result);
-    try std.testing.expectEqualStrings("sig", parsed.value.specs[0].anchors[0].provenance.?.kind);
+    try std.testing.expectEqualStrings("docs/doc.md", parsed.value.docs[0].path);
+    try std.testing.expectEqualStrings("fresh", parsed.value.docs[0].result);
+    try std.testing.expectEqualStrings("src/main.ts", parsed.value.docs[0].anchors[0].identity);
+    try std.testing.expectEqualStrings("file", parsed.value.docs[0].anchors[0].kind);
+    try std.testing.expectEqualStrings("fresh", parsed.value.docs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("sig", parsed.value.docs[0].anchors[0].provenance.?.kind);
 }
 
 test "check --format json reports stale anchors with blame" {
@@ -340,11 +340,11 @@ test "check --format json reports stale anchors with blame" {
     defer repo.cleanup();
 
     try repo.writeFile("src/main.ts", "export function main() {}\n");
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add source and spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add source and doc");
 
-    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
 
     try repo.writeFile("src/main.ts", "export function main() { return 42; }\n");
     try repo.commit("refactor: tweak main return value");
@@ -355,8 +355,8 @@ test "check --format json reports stale anchors with blame" {
     try helpers.validateDriftCheckJson(allocator, result.stdout);
 
     const Payload = struct {
-        summary: struct { result: []const u8, specs_stale: u32, anchors_stale: u32 },
-        specs: []const struct {
+        summary: struct { result: []const u8, docs_stale: u32, anchors_stale: u32 },
+        docs: []const struct {
             result: []const u8,
             anchors: []const struct {
                 result: []const u8,
@@ -375,12 +375,12 @@ test "check --format json reports stale anchors with blame" {
     defer parsed.deinit();
 
     try std.testing.expectEqualStrings("fail", parsed.value.summary.result);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_stale);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_stale);
     try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.anchors_stale);
-    try std.testing.expectEqualStrings("stale", parsed.value.specs[0].result);
-    try std.testing.expectEqualStrings("stale", parsed.value.specs[0].anchors[0].result);
-    try std.testing.expectEqualStrings("changed_after_baseline", parsed.value.specs[0].anchors[0].reason.?.code);
-    const blame = parsed.value.specs[0].anchors[0].blame orelse return error.MissingBlame;
+    try std.testing.expectEqualStrings("stale", parsed.value.docs[0].result);
+    try std.testing.expectEqualStrings("stale", parsed.value.docs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("changed_after_baseline", parsed.value.docs[0].anchors[0].reason.?.code);
+    const blame = parsed.value.docs[0].anchors[0].blame orelse return error.MissingBlame;
     try std.testing.expect(blame.author.len > 0);
     try std.testing.expect(blame.commit.len >= 40);
     try std.testing.expect(std.mem.indexOfScalar(u8, blame.date, 'T') != null);
@@ -392,8 +392,8 @@ test "check --format json reports missing file" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/missing.ts sig:deadbeefdeadbeef\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/missing.ts sig:deadbeefdeadbeef\n");
     try repo.commit("add missing binding");
 
     const result = try repo.runDrift(&.{ "check", "--format", "json" });
@@ -402,7 +402,7 @@ test "check --format json reports missing file" {
     try helpers.validateDriftCheckJson(allocator, result.stdout);
 
     const Payload = struct {
-        specs: []const struct {
+        docs: []const struct {
             anchors: []const struct {
                 result: []const u8,
                 reason: ?struct { code: []const u8 },
@@ -413,8 +413,8 @@ test "check --format json reports missing file" {
     var parsed = try std.json.parseFromSlice(Payload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
-    try std.testing.expectEqualStrings("stale", parsed.value.specs[0].anchors[0].result);
-    try std.testing.expectEqualStrings("file_not_found", parsed.value.specs[0].anchors[0].reason.?.code);
+    try std.testing.expectEqualStrings("stale", parsed.value.docs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("file_not_found", parsed.value.docs[0].anchors[0].reason.?.code);
 }
 
 test "check --format json reports skip with origin_mismatch and verification_state none" {
@@ -422,9 +422,9 @@ test "check --format json reports skip with origin_mismatch and verification_sta
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
     try repo.writeFile("src/main.ts", "export function main() {}\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/main.ts sig:deadbeefdeadbeef origin:github:other/repo\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/main.ts sig:deadbeefdeadbeef origin:github:other/repo\n");
     try repo.commit("add foreign-origin binding");
 
     const result = try repo.runDrift(&.{ "check", "--format", "json" });
@@ -436,12 +436,12 @@ test "check --format json reports skip with origin_mismatch and verification_sta
         summary: struct {
             result: []const u8,
             verification_state: []const u8,
-            specs_total: u32,
-            specs_checked: u32,
-            specs_skipped: u32,
+            docs_total: u32,
+            docs_checked: u32,
+            docs_skipped: u32,
             anchors_skipped: u32,
         },
-        specs: []const struct {
+        docs: []const struct {
             result: []const u8,
             anchors: []const struct {
                 result: []const u8,
@@ -455,16 +455,16 @@ test "check --format json reports skip with origin_mismatch and verification_sta
 
     try std.testing.expectEqualStrings("pass", parsed.value.summary.result);
     try std.testing.expectEqualStrings("none", parsed.value.summary.verification_state);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_total);
-    try std.testing.expectEqual(@as(u32, 0), parsed.value.summary.specs_checked);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_skipped);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_total);
+    try std.testing.expectEqual(@as(u32, 0), parsed.value.summary.docs_checked);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_skipped);
     try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.anchors_skipped);
-    try std.testing.expectEqualStrings("skip", parsed.value.specs[0].result);
-    try std.testing.expectEqualStrings("skip", parsed.value.specs[0].anchors[0].result);
-    try std.testing.expectEqualStrings("origin_mismatch", parsed.value.specs[0].anchors[0].reason.?.code);
+    try std.testing.expectEqualStrings("skip", parsed.value.docs[0].result);
+    try std.testing.expectEqualStrings("skip", parsed.value.docs[0].anchors[0].result);
+    try std.testing.expectEqualStrings("origin_mismatch", parsed.value.docs[0].anchors[0].reason.?.code);
 }
 
-test "check --format json reports verification_state partial when one spec skips and one checks" {
+test "check --format json reports verification_state partial when one doc skips and one checks" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -475,7 +475,7 @@ test "check --format json reports verification_state partial when one spec skips
     try repo.writeFile("src/skip.ts", "export const y = 2;\n");
     try repo.commit("add docs and sources");
 
-    try linkSpec(&repo, "docs/ok.md", "src/ok.ts");
+    try linkDoc(&repo, "docs/ok.md", "src/ok.ts");
     const existing_lock = try repo.readFile("drift.lock");
     defer allocator.free(existing_lock);
     const combined_lock = try std.fmt.allocPrint(
@@ -494,9 +494,9 @@ test "check --format json reports verification_state partial when one spec skips
     const Payload = struct {
         summary: struct {
             verification_state: []const u8,
-            specs_total: u32,
-            specs_checked: u32,
-            specs_skipped: u32,
+            docs_total: u32,
+            docs_checked: u32,
+            docs_skipped: u32,
         },
     };
 
@@ -504,9 +504,9 @@ test "check --format json reports verification_state partial when one spec skips
     defer parsed.deinit();
 
     try std.testing.expectEqualStrings("partial", parsed.value.summary.verification_state);
-    try std.testing.expectEqual(@as(u32, 2), parsed.value.summary.specs_total);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_checked);
-    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.specs_skipped);
+    try std.testing.expectEqual(@as(u32, 2), parsed.value.summary.docs_total);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_checked);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.docs_skipped);
 }
 
 test "check --format rejects unknown values" {
@@ -514,8 +514,8 @@ test "check --format rejects unknown values" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add doc");
 
     const result = try repo.runDrift(&.{ "check", "--format", "yaml" });
     defer result.deinit(allocator);
@@ -524,7 +524,7 @@ test "check --format rejects unknown values" {
     try helpers.expectContains(result.stderr, "unknown --format");
 }
 
-test "check --changed scopes checking to affected specs" {
+test "check --changed scopes checking to affected docs" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -535,9 +535,9 @@ test "check --changed scopes checking to affected specs" {
     try repo.writeFile("src/payments/stripe.ts", "export const stripe = true;\n");
     try repo.commit("add docs and sources");
 
-    try linkSpec(&repo, "docs/auth.md", "src/auth/login.ts");
-    try linkSpec(&repo, "docs/payments.md", "src/payments/stripe.ts");
-    try repo.commit("link both specs");
+    try linkDoc(&repo, "docs/auth.md", "src/auth/login.ts");
+    try linkDoc(&repo, "docs/payments.md", "src/payments/stripe.ts");
+    try repo.commit("link both docs");
 
     try repo.writeFile("src/auth/login.ts", "export const login = false;\n");
     try repo.commit("modify auth source");
@@ -555,12 +555,12 @@ test "check --changed returns ok when no bindings match the prefix" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
     try repo.writeFile("src/main.ts", "export const value = 1;\n");
-    try repo.commit("add spec and source");
+    try repo.commit("add doc and source");
 
-    try linkSpec(&repo, "docs/spec.md", "src/main.ts");
-    try repo.commit("link spec");
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
 
     const result = try repo.runDrift(&.{ "check", "--changed", "src/other" });
     defer result.deinit(allocator);
@@ -574,8 +574,8 @@ test "lint --format json works as alias" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.commit("add spec");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.commit("add doc");
 
     const result = try repo.runDrift(&.{ "lint", "--format", "json" });
     defer result.deinit(allocator);

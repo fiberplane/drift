@@ -1,9 +1,9 @@
 
 <img width="276" height="84" alt="Drift Logo" src="https://github.com/user-attachments/assets/19618b90-d43e-4e92-8497-9674a87693e2" />
 
-Bind specs to code and check for drift.
+Bind docs to code and check for drift.
 
-Any markdown file in your repo can declare anchors to code — specific files or AST symbols. When bound code changes, `drift check` flags the spec as stale. Agents that change code must update the specs they affect.
+Any markdown file in your repo can declare anchors to code — specific files or AST symbols. When bound code changes, `drift check` flags the doc as stale. Agents that change code must update the docs they affect.
 
 ## Install
 
@@ -38,34 +38,34 @@ curl -fsSL https://drift.fp.dev/install.sh | sh
 npx skills add fiberplane/drift
 ```
 
-The skill teaches coding agents how to maintain drift anchors. Once installed, the agent will run `drift link` to stamp provenance and keep specs in sync as it makes code changes. When `drift check` is in CI, stale specs block merges — so the agent can't silently break documentation.
+The skill teaches coding agents how to maintain drift anchors. Once installed, the agent will run `drift link` to stamp provenance and keep docs in sync as it makes code changes. When `drift check` is in CI, stale docs block merges — so the agent can't silently break documentation.
 
 ## Usage
 
-Write a markdown spec, then bind it to code:
+Write a markdown doc, then bind it to code:
 
 ```
 drift link docs/auth.md src/auth/login.ts
 drift link docs/auth.md src/auth/provider.ts#AuthConfig
 ```
 
-`drift link` adds the anchor to the spec's YAML frontmatter and stamps a content signature — an AST fingerprint of the target file or symbol. No git commit needed; it hashes what's on disk. You can also reference code inline — `@./src/auth/provider.ts#AuthConfig` in the spec body — and `drift link` will stamp those too.
+`drift link` adds the anchor to the doc's YAML frontmatter and stamps a content signature — an AST fingerprint of the target file or symbol. No git commit needed; it hashes what's on disk. You can also reference code inline — `@./src/auth/provider.ts#AuthConfig` in the doc body — and `drift link` will stamp those too.
 
-Check if specs are fresh:
+Check if docs are fresh:
 
 ```
 drift check
 ```
 
-Refresh all anchors in a spec after updating it:
+Refresh all anchors in a doc after updating it:
 
 ```
 drift link docs/auth.md
 ```
 
-### What a spec anchor looks like
+### What a doc anchor looks like
 
-After linking, your spec has frontmatter anchors and (optionally) inline references:
+After linking, your doc has frontmatter anchors and (optionally) inline references:
 
 ```markdown
 ---
@@ -101,9 +101,9 @@ If you don't want frontmatter visible on GitHub, use an HTML comment instead:
 -->
 ```
 
-### Cross-repo specs (origin)
+### Cross-repo docs (origin)
 
-Specs that travel across repo boundaries — installed skills, vendored docs, shared templates — can declare where their anchors belong:
+Docs that travel across repo boundaries — installed skills, vendored docs, shared templates — can declare where their anchors belong:
 
 ```yaml
 drift:
@@ -112,14 +112,14 @@ drift:
     - src/main.zig@sig:a1b2c3d4e5f67890
 ```
 
-When `origin` is set and doesn't match the current repo, `drift check` skips those anchors instead of reporting false "file not found" errors. Specs without `origin` are always checked.
+When `origin` is set and doesn't match the current repo, `drift check` skips those anchors instead of reporting false "file not found" errors. Docs without `origin` are always checked.
 
 ## Commands
 
 ```
-drift check         Check all specs for staleness (exits 1 if stale)
-drift status        Show all spec anchors, including inline @./ refs
-drift link          Add an anchor to a spec (auto-appends provenance)
+drift check         Check all docs for staleness (exits 1 if stale)
+drift status        Show all doc anchors, including inline @./ refs
+drift link          Add an anchor to a doc (auto-appends provenance)
 drift unlink        Remove an anchor from frontmatter or drift comments
 ```
 
@@ -135,7 +135,7 @@ No VCS history is needed for staleness detection — `drift check` works entirel
 $ drift check
 
 docs/auth.md
-  STALE   src/auth/provider.ts#AuthConfig (changed after spec)
+  STALE   src/auth/provider.ts#AuthConfig (changed after doc)
           changed by mike in e4f8a2c (Mar 15)
           "refactor: split auth config into separate concerns"
   STALE   src/core/old-module.ts (file not found)
@@ -144,12 +144,12 @@ docs/auth.md
 docs/payments.md
   ok
 
-1 spec stale, 1 ok
+1 doc stale, 1 ok
 ```
 
 ## CI
 
-`drift check` exits 1 when any spec is stale, so it works as a CI gate:
+`drift check` exits 1 when any doc is stale, so it works as a CI gate:
 
 ```yaml
 # .github/workflows/drift.yml

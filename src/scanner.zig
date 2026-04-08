@@ -2,12 +2,12 @@ const std = @import("std");
 const frontmatter = @import("frontmatter.zig");
 const markdown = @import("markdown.zig");
 
-pub const Spec = struct {
+pub const Doc = struct {
     path: []const u8,
     anchors: std.ArrayList([]const u8),
     origin: ?[]const u8 = null,
 
-    pub fn deinit(self: *Spec, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Doc, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
         for (self.anchors.items) |b| allocator.free(b);
         self.anchors.deinit(allocator);
@@ -42,11 +42,11 @@ fn mergeInlineAnchors(allocator: std.mem.Allocator, anchors: *std.ArrayList([]co
     }
 }
 
-/// Discover specs by listing git-tracked markdown files.
+/// Discover docs by listing git-tracked markdown files.
 /// Respects .gitignore — untracked/ignored files are never scanned.
 /// Uses `-z` (NUL-terminated paths) so unusual paths are raw bytes (newline mode C-escapes
 /// names with quotes). Filters `.md` in-process so pathspec globs are not required.
-pub fn findSpecs(allocator: std.mem.Allocator, specs: *std.ArrayList(Spec)) !void {
+pub fn findDocs(allocator: std.mem.Allocator, docs: *std.ArrayList(Doc)) !void {
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard" },
@@ -73,18 +73,18 @@ pub fn findSpecs(allocator: std.mem.Allocator, specs: *std.ArrayList(Spec)) !voi
         };
         defer allocator.free(content);
 
-        if (frontmatter.parseDriftSpec(allocator, content)) |drift_spec| {
-            var spec = drift_spec;
+        if (frontmatter.parseDriftDoc(allocator, content)) |drift_doc| {
+            var doc = drift_doc;
             errdefer {
-                for (spec.anchors.items) |b| allocator.free(b);
-                spec.anchors.deinit(allocator);
-                if (spec.origin) |o| allocator.free(o);
+                for (doc.anchors.items) |b| allocator.free(b);
+                doc.anchors.deinit(allocator);
+                if (doc.origin) |o| allocator.free(o);
             }
-            try mergeInlineAnchors(allocator, &spec.anchors, content);
-            try specs.append(allocator, .{
+            try mergeInlineAnchors(allocator, &doc.anchors, content);
+            try docs.append(allocator, .{
                 .path = file_path,
-                .anchors = spec.anchors,
-                .origin = spec.origin,
+                .anchors = doc.anchors,
+                .origin = doc.origin,
             });
         } else {
             allocator.free(file_path);
@@ -92,12 +92,12 @@ pub fn findSpecs(allocator: std.mem.Allocator, specs: *std.ArrayList(Spec)) !voi
     }
 }
 
-/// Discover specs, merge inline anchors, and sort by path.
-pub fn findAndSortSpecs(allocator: std.mem.Allocator, specs: *std.ArrayList(Spec)) !void {
-    try findSpecs(allocator, specs);
+/// Discover docs, merge inline anchors, and sort by path.
+pub fn findAndSortDocs(allocator: std.mem.Allocator, docs: *std.ArrayList(Doc)) !void {
+    try findDocs(allocator, docs);
 
-    std.mem.sort(Spec, specs.items, {}, struct {
-        fn lessThan(_: void, a: Spec, b: Spec) bool {
+    std.mem.sort(Doc, docs.items, {}, struct {
+        fn lessThan(_: void, a: Doc, b: Doc) bool {
             return std.mem.order(u8, a.path, b.path) == .lt;
         }
     }.lessThan);
@@ -270,7 +270,7 @@ pub fn isTrailingPunctuation(c: u8) bool {
 test "parseInlineAnchors strips surrounding quote punctuation" {
     const allocator = std.testing.allocator;
     const content =
-        \\# Spec
+        \\# Doc
         \\
         \\See "@./src/main.ts" and '@./src/lib.ts#Foo'.
         \\
@@ -290,7 +290,7 @@ test "parseInlineAnchors strips surrounding quote punctuation" {
 test "updateInlineAnchors preserves surrounding quote punctuation" {
     const allocator = std.testing.allocator;
     const content =
-        \\# Spec
+        \\# Doc
         \\
         \\See "@./src/main.ts" and '@./src/lib.ts#Foo'.
         \\

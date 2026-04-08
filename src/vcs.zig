@@ -59,13 +59,13 @@ pub fn getLastCommit(allocator: std.mem.Allocator, cwd_path: []const u8, file_pa
 pub fn checkStaleness(
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
-    spec_commit: []const u8,
+    doc_commit: []const u8,
     bound_file: []const u8,
     vcs: VcsKind,
 ) !bool {
     const result = switch (vcs) {
         .git => blk: {
-            const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{spec_commit});
+            const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{doc_commit});
             defer allocator.free(range);
             break :blk try std.process.Child.run(.{
                 .allocator = allocator,
@@ -75,7 +75,7 @@ pub fn checkStaleness(
             });
         },
         .jj => blk: {
-            const revset = try std.fmt.allocPrint(allocator, "{s}..@ & file(\"{s}\")", .{ spec_commit, bound_file });
+            const revset = try std.fmt.allocPrint(allocator, "{s}..@ & file(\"{s}\")", .{ doc_commit, bound_file });
             defer allocator.free(revset);
             break :blk try std.process.Child.run(.{
                 .allocator = allocator,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers");
 
-test "refs prints specs that reference a file target" {
+test "refs prints docs that reference a file target" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -20,7 +20,7 @@ test "refs prints specs that reference a file target" {
     try helpers.expectContains(result.stdout, "docs/onboarding.md");
 }
 
-test "refs prints specs that reference a symbol target" {
+test "refs prints docs that reference a symbol target" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();

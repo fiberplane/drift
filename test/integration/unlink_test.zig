@@ -6,15 +6,15 @@ test "unlink removes file binding from drift.lock" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/a.ts sig:aaaa\ndocs/spec.md -> src/b.ts sig:bbbb\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/a.ts sig:aaaa\ndocs/doc.md -> src/b.ts sig:bbbb\n");
     try repo.commit("add lockfile bindings");
 
-    const result = try repo.runDrift(&.{ "unlink", "docs/spec.md", "src/a.ts" });
+    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/a.ts" });
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
-    try helpers.expectContains(result.stdout, "removed docs/spec.md -> src/a.ts from drift.lock");
+    try helpers.expectContains(result.stdout, "removed docs/doc.md -> src/a.ts from drift.lock");
 
     const content = try repo.readFile("drift.lock");
     defer allocator.free(content);
@@ -27,11 +27,11 @@ test "unlink removes binding regardless of provenance in input" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/file.ts sig:aaaa\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/file.ts sig:aaaa\n");
     try repo.commit("add lockfile binding");
 
-    const result = try repo.runDrift(&.{ "unlink", "docs/spec.md", "src/file.ts@sig:old" });
+    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/file.ts@sig:old" });
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
@@ -46,11 +46,11 @@ test "unlink on non-existent binding is a no-op" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/a.ts sig:aaaa\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/a.ts sig:aaaa\n");
     try repo.commit("add lockfile binding");
 
-    const result = try repo.runDrift(&.{ "unlink", "docs/spec.md", "src/missing.ts" });
+    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/missing.ts" });
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
@@ -65,11 +65,11 @@ test "unlink removes symbol binding" {
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/lib.ts#Foo sig:aaaa\n");
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/lib.ts#Foo sig:aaaa\n");
     try repo.commit("add symbol binding");
 
-    const result = try repo.runDrift(&.{ "unlink", "docs/spec.md", "src/lib.ts#Foo" });
+    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/lib.ts#Foo" });
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
@@ -79,21 +79,21 @@ test "unlink removes symbol binding" {
     try helpers.expectNotContains(content, "src/lib.ts#Foo");
 }
 
-test "unlink leaves spec markdown untouched" {
+test "unlink leaves doc markdown untouched" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
 
-    try repo.writeFile("docs/spec.md", "# Spec\n\nBody.\n");
-    try repo.writeFile("drift.lock", "docs/spec.md -> src/a.ts sig:aaaa\n");
-    try repo.commit("add spec and binding");
+    try repo.writeFile("docs/doc.md", "# Doc\n\nBody.\n");
+    try repo.writeFile("drift.lock", "docs/doc.md -> src/a.ts sig:aaaa\n");
+    try repo.commit("add doc and binding");
 
-    const result = try repo.runDrift(&.{ "unlink", "docs/spec.md", "src/a.ts" });
+    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/a.ts" });
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
 
-    const spec_content = try repo.readFile("docs/spec.md");
+    const spec_content = try repo.readFile("docs/doc.md");
     defer allocator.free(spec_content);
-    try std.testing.expectEqualStrings("# Spec\n\nBody.\n", spec_content);
+    try std.testing.expectEqualStrings("# Doc\n\nBody.\n", spec_content);
 }

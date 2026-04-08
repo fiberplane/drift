@@ -13,52 +13,52 @@ pub fn run(allocator: std.mem.Allocator, stdout_w: *std.io.Writer, stderr_w: *st
     var lf = try lockfile.discover(allocator, cwd_path);
     defer lf.deinit(allocator);
 
-    var specs = try lockfile.groupBySpec(allocator, lf.bindings.items);
+    var docs = try lockfile.groupByDoc(allocator, lf.bindings.items);
     defer {
-        for (specs.items) |*spec| spec.deinit(allocator);
-        specs.deinit(allocator);
+        for (docs.items) |*doc| doc.deinit(allocator);
+        docs.deinit(allocator);
     }
 
     switch (format) {
-        .json => try writeSpecsJson(stdout_w, specs.items),
-        .text => writeSpecsText(stdout_w, specs.items),
+        .json => try writeDocsJson(stdout_w, docs.items),
+        .text => writeDocsText(stdout_w, docs.items),
     }
 }
 
-fn writeSpecsText(w: *std.io.Writer, specs: []const lockfile.SpecBindings) void {
-    if (specs.len == 0) return;
+fn writeDocsText(w: *std.io.Writer, docs: []const lockfile.DocBindings) void {
+    if (docs.len == 0) return;
 
-    for (specs, 0..) |spec, idx| {
+    for (docs, 0..) |doc, idx| {
         w.print("{s} ({d} anchor{s})\n", .{
-            spec.path,
-            spec.bindings.items.len,
-            if (spec.bindings.items.len == 1) "" else "s",
+            doc.path,
+            doc.bindings.items.len,
+            if (doc.bindings.items.len == 1) "" else "s",
         }) catch {};
 
-        if (spec.bindings.items.len > 0) {
+        if (doc.bindings.items.len > 0) {
             w.print("  files:\n", .{}) catch {};
-            for (spec.bindings.items) |binding| {
+            for (doc.bindings.items) |binding| {
                 w.print("    - {s}\n", .{binding.target}) catch {};
             }
         }
 
-        if (idx < specs.len - 1) {
+        if (idx < docs.len - 1) {
             w.print("\n", .{}) catch {};
         }
     }
 }
 
-fn writeSpecsJson(w: *std.io.Writer, specs: []const lockfile.SpecBindings) !void {
+fn writeDocsJson(w: *std.io.Writer, docs: []const lockfile.DocBindings) !void {
     var json_w: std.json.Stringify = .{ .writer = w, .options = .{} };
 
     try json_w.beginArray();
-    for (specs) |spec| {
+    for (docs) |doc| {
         try json_w.beginObject();
-        try json_w.objectField("spec");
-        try json_w.write(spec.path);
+        try json_w.objectField("doc");
+        try json_w.write(doc.path);
         try json_w.objectField("files");
         try json_w.beginArray();
-        for (spec.bindings.items) |binding| {
+        for (doc.bindings.items) |binding| {
             try json_w.write(binding.target);
         }
         try json_w.endArray();

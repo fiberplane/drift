@@ -11,12 +11,12 @@ pub const MetadataField = struct {
 };
 
 pub const Binding = struct {
-    spec_path: []const u8,
+    doc_path: []const u8,
     target: []const u8,
     metadata: std.ArrayList(MetadataField),
 
     pub fn deinit(self: *Binding, allocator: std.mem.Allocator) void {
-        allocator.free(self.spec_path);
+        allocator.free(self.doc_path);
         allocator.free(self.target);
         for (self.metadata.items) |field| field.deinit(allocator);
         self.metadata.deinit(allocator);
@@ -58,11 +58,11 @@ pub const Lockfile = struct {
     }
 };
 
-pub const SpecBindings = struct {
+pub const DocBindings = struct {
     path: []const u8,
     bindings: std.ArrayList(*Binding),
 
-    pub fn deinit(self: *SpecBindings, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *DocBindings, allocator: std.mem.Allocator) void {
         self.bindings.deinit(allocator);
     }
 };
@@ -139,50 +139,50 @@ pub fn parseInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
     }
 }
 
-pub fn groupBySpec(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayList(SpecBindings) {
-    var specs: std.ArrayList(SpecBindings) = .{};
+pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayList(DocBindings) {
+    var docs: std.ArrayList(DocBindings) = .{};
     errdefer {
-        for (specs.items) |*spec| spec.deinit(allocator);
-        specs.deinit(allocator);
+        for (docs.items) |*doc| doc.deinit(allocator);
+        docs.deinit(allocator);
     }
 
     for (bindings) |*binding| {
-        var found: ?*SpecBindings = null;
-        for (specs.items) |*spec| {
-            if (std.mem.eql(u8, spec.path, binding.spec_path)) {
-                found = spec;
+        var found: ?*DocBindings = null;
+        for (docs.items) |*doc| {
+            if (std.mem.eql(u8, doc.path, binding.doc_path)) {
+                found = doc;
                 break;
             }
         }
 
-        if (found) |spec| {
-            try spec.bindings.append(allocator, binding);
+        if (found) |doc| {
+            try doc.bindings.append(allocator, binding);
         } else {
-            var spec = SpecBindings{
-                .path = binding.spec_path,
+            var doc = DocBindings{
+                .path = binding.doc_path,
                 .bindings = .{},
             };
-            errdefer spec.deinit(allocator);
-            try spec.bindings.append(allocator, binding);
-            try specs.append(allocator, spec);
+            errdefer doc.deinit(allocator);
+            try doc.bindings.append(allocator, binding);
+            try docs.append(allocator, doc);
         }
     }
 
-    std.mem.sort(SpecBindings, specs.items, {}, struct {
-        fn lessThan(_: void, a: SpecBindings, b: SpecBindings) bool {
+    std.mem.sort(DocBindings, docs.items, {}, struct {
+        fn lessThan(_: void, a: DocBindings, b: DocBindings) bool {
             return std.mem.order(u8, a.path, b.path) == .lt;
         }
     }.lessThan);
 
-    for (specs.items) |*spec| {
-        std.mem.sort(*Binding, spec.bindings.items, {}, struct {
+    for (docs.items) |*doc| {
+        std.mem.sort(*Binding, doc.bindings.items, {}, struct {
             fn lessThan(_: void, a: *Binding, b: *Binding) bool {
                 return std.mem.order(u8, a.target, b.target) == .lt;
             }
         }.lessThan);
     }
 
-    return specs;
+    return docs;
 }
 
 pub fn serialize(allocator: std.mem.Allocator, bindings: []const Binding) ![]u8 {
@@ -225,9 +225,9 @@ pub fn writeFile(lockfile: *const Lockfile, allocator: std.mem.Allocator) !void 
 
 fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
     const arrow = std.mem.indexOf(u8, line, " -> ") orelse return error.InvalidBindingLine;
-    const spec_path = std.mem.trim(u8, line[0..arrow], " \t");
+    const doc_path = std.mem.trim(u8, line[0..arrow], " \t");
     const rest = std.mem.trim(u8, line[arrow + " -> ".len ..], " \t");
-    if (spec_path.len == 0 or rest.len == 0) return error.InvalidBindingLine;
+    if (doc_path.len == 0 or rest.len == 0) return error.InvalidBindingLine;
 
     var tokens = std.mem.tokenizeScalar(u8, rest, ' ');
     const target = tokens.next() orelse return error.InvalidBindingLine;
@@ -248,7 +248,7 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
     }
 
     return .{
-        .spec_path = try allocator.dupe(u8, spec_path),
+        .doc_path = try allocator.dupe(u8, doc_path),
         .target = try allocator.dupe(u8, target),
         .metadata = metadata,
     };
@@ -259,7 +259,7 @@ fn renderLine(allocator: std.mem.Allocator, binding: Binding) ![]u8 {
     errdefer output.deinit(allocator);
     const writer = output.writer(allocator);
 
-    try writer.print("{s} -> {s}", .{ binding.spec_path, binding.target });
+    try writer.print("{s} -> {s}", .{ binding.doc_path, binding.target });
     for (binding.metadata.items) |field| {
         try writer.print(" {s}:{s}", .{ field.key, field.value });
     }
@@ -310,7 +310,7 @@ test "parseInto reads bindings and metadata" {
 
     try parseInto(allocator, content, &bindings);
     try std.testing.expectEqual(@as(usize, 2), bindings.items.len);
-    try std.testing.expectEqualStrings("docs/auth.md", bindings.items[0].spec_path);
+    try std.testing.expectEqualStrings("docs/auth.md", bindings.items[0].doc_path);
     try std.testing.expectEqualStrings("src/auth/login.ts", bindings.items[0].target);
     try std.testing.expectEqualStrings("a1b2c3d4e5f6a7b8", bindings.items[0].fieldValue("sig").?);
     try std.testing.expectEqualStrings("github:fiberplane/drift", bindings.items[1].fieldValue("origin").?);
@@ -326,12 +326,12 @@ test "serialize sorts lines and appends trailing newline" {
     }
 
     try bindings.append(allocator, .{
-        .spec_path = try allocator.dupe(u8, "docs/z.md"),
+        .doc_path = try allocator.dupe(u8, "docs/z.md"),
         .target = try allocator.dupe(u8, "src/z.ts"),
         .metadata = .{},
     });
     try bindings.append(allocator, .{
-        .spec_path = try allocator.dupe(u8, "docs/a.md"),
+        .doc_path = try allocator.dupe(u8, "docs/a.md"),
         .target = try allocator.dupe(u8, "src/a.ts"),
         .metadata = .{},
     });
@@ -353,7 +353,7 @@ test "discover walks up to find drift.lock" {
     try tmp.dir.makePath("repo/nested/work");
     try tmp.dir.writeFile(.{
         .sub_path = "repo/drift.lock",
-        .data = "docs/spec.md -> src/main.ts sig:abc123\n",
+        .data = "docs/doc.md -> src/main.ts sig:abc123\n",
     });
 
     const start_path = try tmp.dir.realpathAlloc(allocator, "repo/nested/work");
