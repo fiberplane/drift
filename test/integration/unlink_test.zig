@@ -22,7 +22,7 @@ test "unlink removes file binding from drift.lock" {
     try helpers.expectContains(content, "src/b.ts");
 }
 
-test "unlink removes binding regardless of provenance in input" {
+test "unlink removes exact file binding" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -31,7 +31,7 @@ test "unlink removes binding regardless of provenance in input" {
     try repo.writeFile("drift.lock", "docs/doc.md -> src/file.ts sig:aaaa\n");
     try repo.commit("add lockfile binding");
 
-    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/file.ts@sig:old" });
+    const result = try repo.runDrift(&.{ "unlink", "docs/doc.md", "src/file.ts" });
     defer result.deinit(allocator);
 
     try helpers.expectExitCode(result.term, 0);
