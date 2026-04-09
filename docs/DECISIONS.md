@@ -16,7 +16,7 @@ Within a single lint run, file content is cached in memory (`FileCache`) and VCS
 
 ## 3. Lockfile over embedded anchors
 
-Anchors moved from doc frontmatter and HTML comments to `drift.lock` at the repo root. The original design embedded anchors directly in doc files — YAML frontmatter, `<!-- drift: ... -->` comments, and `@./path` inline references. The reasoning was sound for checking (scanning is fast, the number of docs is small, docs are self-contained), but it didn't account for reverse lookups and clean rendering.
+Anchors moved from doc frontmatter and HTML comments to `drift.lock` at the repo root. The original design embedded anchors directly in doc files (YAML frontmatter and HTML comments). The reasoning was sound for checking (scanning is fast, the number of docs is small, docs are self-contained), but it didn't account for reverse lookups and clean rendering.
 
 Embedded anchors have structural limitations:
 - **No reverse lookup** — answering "which docs reference this file?" requires parsing every doc. A lockfile is a flat index that works in both directions.
@@ -143,3 +143,17 @@ Helpers communicate lifetime intent through which allocator they accept:
 `drift.lock` is found by walking up from cwd, not by asking git for the repo root. This decouples drift from git for project root discovery — the same pattern as `Cargo.toml`, `package.json`, and `go.mod`. The lockfile itself becomes the project root marker.
 
 This matters because drift aims to support multiple VCS backends. Asking git for the repo root would hardcode git as the root-discovery mechanism even when running under jj or a future VCS. Walking up for `drift.lock` is VCS-agnostic and consistent with how most tools find their project root.
+
+## 14. Tree-sitter markdown for link checking and doc-to-doc anchors
+
+Markdown docs are parsed with tree-sitter during lint using the two-parser `tree-sitter-markdown` grammar (block grammar for document structure, inline grammar for link extraction). This serves two purposes:
+
+- **Broken link detection**: all `[text](relative/path.md)` links in drift-managed docs are extracted from `inline_link` nodes and checked for file existence. Missing targets are reported as `BROKEN` — no lockfile entry needed.
+- **Doc-to-doc anchors**: a lockfile binding like `docs/overview.md -> docs/auth.md#Authentication sig:...` resolves the heading in the target doc via the block grammar's `section`/`atx_heading` nodes, then fingerprints the section content for staleness detection. Headings are structurally equivalent to code symbols.
+
+We use tree-sitter for link extraction rather than regex because:
+- The inline grammar handles all link variants (inline links, reference links, autolinks) and naturally excludes links inside code blocks and code spans
+- The same parse feeds both link checking and heading resolution — one parse, two uses
+- Tree-sitter markdown's `section` node provides heading-to-body grouping, which regex cannot reliably determine
+
+The two-parser architecture requires two passes per file: block grammar first (producing `inline` node ranges), then inline grammar on those ranges. This adds build complexity (two grammar C sources, two `ts.Language` instances) but is how the grammar is designed — block and inline are separate grammars with separate node types.

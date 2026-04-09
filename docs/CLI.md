@@ -4,7 +4,7 @@
 
 ## drift check / drift lint
 
-Check all docs for staleness. The primary command. Exits 1 if any anchor is stale. `drift lint` is an alias.
+Check all docs for staleness. The primary command. Exits 1 if any anchor is stale or any link is broken. `drift lint` is an alias.
 
 ```
 drift check [--format text|json] [--changed <path>]
@@ -20,23 +20,28 @@ The JSON output emits the `drift.check.v1` schema with summary counts, per-doc r
 $ drift lint
 
 docs/auth.md
-  STALE   src/auth/provider.ts#AuthConfig
-          changed after doc
-  STALE   src/auth/login.ts
-          changed after doc
+  STALE   src/auth/provider.ts#AuthConfig (changed after doc)
+          changed by mike in e4f8a2c (2026-03-15T10:00:00+00:00)
+          "refactor: split auth config into separate concerns"
+  BROKEN  docs/old-guide.md (link target not found)
+
+docs/overview.md
+  STALE   docs/auth.md#Authentication (changed after doc)
 
 docs/payments.md
   ok
 
 docs/project.md
-  STALE   src/core/old-module.ts
-          file not found
+  STALE   src/core/old-module.ts (file not found)
 
 vendor/shared-skill.md
   SKIP   src/main.rs (origin: github:acme/other-repo)
 
-2 docs stale, 1 ok
+2 docs stale, 1 ok, 1 broken link
 ```
+
+- `STALE` means a lockfile anchor's target has changed since the signature was recorded.
+- `BROKEN` means a plain markdown link in the doc points to a file that doesn't exist — no lockfile entry is needed for this check.
 
 Anchors with an `origin:` field that doesn't match the current repo are skipped — they reference files in a different repository.
 
@@ -80,6 +85,9 @@ added docs/auth.md -> src/auth/session.ts sig:a1b2c3d4e5f6a7b8
 
 $ drift link docs/auth.md src/auth/provider.ts#AuthConfig
 added docs/auth.md -> src/auth/provider.ts#AuthConfig sig:c3d4e5f6a7b8a1b2
+
+$ drift link docs/overview.md docs/auth.md#Authentication
+added docs/overview.md -> docs/auth.md#Authentication sig:d4e5f6a7b8c9d0e1
 ```
 
 **Blanket mode** — refreshes all `sig:` values for that doc in `drift.lock`:
@@ -90,8 +98,6 @@ relinked all anchors in docs/auth.md
 ```
 
 Each anchor gets its own content signature computed from the current file on disk.
-
-If the doc has legacy embedded anchors (YAML frontmatter or `<!-- drift: ... -->` HTML comments), `drift link` migrates them: writes the bindings to `drift.lock` and strips the embedded metadata from the doc file. No separate migration command — linking on the new version handles it.
 
 ## drift unlink
 

@@ -12,18 +12,9 @@ drift makes the anchor between docs and code explicit and enforceable. Any markd
 
 ### Doc
 
-A doc is any markdown file with entries in `drift.lock`. Docs are pure markdown — no frontmatter, no HTML comments, no inline markers. A file becomes a drift doc by having at least one binding in the lockfile.
+A doc is any markdown file with entries in `drift.lock`. Docs are pure markdown — no frontmatter, no HTML comments, no inline markers. A file becomes a drift doc by having at least one binding in the lockfile. All bindings between docs and code live in `drift.lock` at the repo root.
 
-```markdown
-# Auth Architecture
-
-The login flow uses AuthConfig for token validation.
-Provider selection happens at startup based on environment.
-
-<!-- depends: docs/project.md -->
-```
-
-The doc itself contains no drift metadata. All bindings between docs and code live in `drift.lock` at the repo root.
+During `drift lint`, each doc is also parsed to extract markdown links. Any relative link pointing to a nonexistent file is reported as `BROKEN` — this requires no lockfile entry.
 
 ### Anchors
 
@@ -72,9 +63,20 @@ Filter captures where `@name` matches the target symbol. Extract the `@definitio
 
 If the symbol is not found, the anchor is reported as STALE with reason "symbol not found".
 
-### Dependencies
+Doc-to-doc anchors work the same way. A heading in a markdown file is structurally equivalent to a named symbol. `docs/overview.md -> docs/auth.md#Authentication` resolves `Authentication` as a heading in `docs/auth.md`, and fingerprints the section content (heading + body until the next heading at the same or higher level). Tree-sitter markdown's `section` node provides this grouping natively — an H2 section nests inside an H1 section, and the section node spans from the heading to the start of the next sibling heading.
 
-Docs can depend on other docs via `<!-- depends: path/to/other.md -->` comments. This declares that one doc builds on another's context. Dependencies are used for DAG ordering when composing prompts (future), not for staleness detection.
+### Markdown Links
+
+drift checks all markdown links in drift-managed docs for existence. During `drift lint`, each doc is parsed with tree-sitter markdown (block + inline grammars) to extract `[text](target)` links. If the target is a relative path to a file that doesn't exist, the link is reported as `BROKEN`.
+
+This is separate from lockfile anchors — no binding in `drift.lock` is needed. Any markdown link to a relative file path is checked. Links to URLs, fragments-only (`#heading`), and absolute paths are ignored.
+
+```
+docs/auth.md
+  BROKEN  docs/old-guide.md (link target not found)
+```
+
+Broken link detection uses the same tree-sitter parse that doc-to-doc anchor resolution uses. A doc is parsed once; links are extracted from `inline_link` nodes in the inline grammar pass.
 
 ## Staleness Detection
 
@@ -166,8 +168,7 @@ Every command creates two arena allocators backed by the GPA in `main()`. The **
 
 Additional modules:
 - `lockfile.zig` — read, write, and query `drift.lock` bindings; line-oriented parser and serializer
-- `frontmatter.zig` — legacy migration only: strips old YAML frontmatter and `<!-- drift: ... -->` comment blocks during `drift link`
-- `markdown.zig` — markdown-aware utilities: fenced code / inline code detection, frontmatter boundary parsing
+- `markdown.zig` — markdown parsing via tree-sitter (block + inline grammars): link extraction, heading resolution, section fingerprinting
 - `main.zig` — CLI entry point, argument parsing, subcommand dispatch
 - `commands/lint.zig` — lint engine: file/content caching, anchor staleness checks, report formatting
 - `commands/status.zig` — doc listing in text and JSON formats
@@ -187,6 +188,7 @@ For each anchor, resolves the current state:
 
 - **File-level**: stat the file, hash its content
 - **Symbol-level**: parse with tree-sitter, find the symbol via `.scm` query, hash a normalized syntax fingerprint of the symbol
+- **Heading-level (doc-to-doc)**: parse markdown with tree-sitter, find heading via block grammar's `section`/`atx_heading` nodes, hash the section's normalized syntax tree
 
 Parsing is on-demand. Only files that are actually bound get parsed. A lint run that checks 10 docs anchoring to 30 symbols across 20 files does 20 tree-sitter parses — milliseconds.
 
@@ -211,6 +213,7 @@ The lockfile is a flat, line-oriented file at the repo root. Every binding betwe
 # drift.lock — managed by drift, do not edit manually
 docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890
 docs/auth.md -> src/auth/provider.ts#AuthConfig sig:1a2b3c4d5e6f7890 origin:github:fiberplane/drift
+docs/overview.md -> docs/auth.md#Authentication sig:b3c4d5e6f7a8b9c0
 docs/payments.md -> src/payments/stripe.ts sig:9a8b7c6d5e4f3210
 ```
 
