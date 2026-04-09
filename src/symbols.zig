@@ -1,5 +1,6 @@
 const std = @import("std");
 const ts = @import("tree_sitter");
+const markdown = @import("markdown.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -179,11 +180,17 @@ pub fn resolveSymbolWithTreeSitter(source: []const u8, lang_query: LanguageQuery
 pub fn computeFingerprint(content: []const u8, file_path: []const u8, symbol_name: ?[]const u8) ?u64 {
     const ext = std.fs.path.extension(file_path);
     if (symbol_name) |sym| {
+        if (std.mem.eql(u8, ext, ".md")) {
+            return markdown.fingerprintHeadingSection(content, sym);
+        }
         const lang_query = languageForExtension(ext) orelse return null;
         return fingerprintSymbolSyntax(content, lang_query, sym);
     }
     if (languageForExtension(ext)) |lang_query| {
         return fingerprintFileSyntax(content, lang_query);
+    }
+    if (std.mem.eql(u8, ext, ".md")) {
+        return markdown.fingerprintDocumentSyntax(content);
     }
     var hasher = std.hash.XxHash3.init(0);
     hasher.update(content);
@@ -213,7 +220,7 @@ test "fingerprintFileSyntax works for zig source" {
 test "computeFingerprint matches for real zig files" {
     const allocator = std.testing.allocator;
 
-    const files = [_][]const u8{ "src/main.zig", "src/frontmatter.zig", "src/scanner.zig", "src/vcs.zig" };
+    const files = [_][]const u8{ "src/main.zig", "src/markdown.zig", "src/lockfile.zig", "src/vcs.zig" };
     for (files) |path| {
         const content = std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024) catch continue;
         defer allocator.free(content);
