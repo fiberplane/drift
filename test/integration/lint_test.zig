@@ -595,6 +595,195 @@ test "check --changed returns ok when no bindings match the prefix" {
     try helpers.expectContains(result.stdout, "ok");
 }
 
+test "check --changed includes broken-link-only docs when doc path matches" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/broken.md", "# Broken\n\nSee [missing](missing.md).\n");
+    try repo.writeFile("docs/ok.md", "# Ok\n\nSee [self](ok.md).\n");
+    try repo.commit("add docs");
+
+    const result = try repo.runDrift(&.{ "check", "--changed", "docs/broken.md" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "docs/broken.md");
+    try helpers.expectContains(result.stdout, "BROKEN  docs/missing.md (link target not found)");
+    try helpers.expectNotContains(result.stdout, "docs/ok.md");
+}
+
+test "lint reports broken relative markdown links" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/doc.md", "# Doc\n\nSee [old](missing.md).\n");
+    try repo.writeFile("src/main.ts", "export const value = 1;\n");
+    try repo.commit("add doc and source");
+
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
+
+    const result = try repo.runDrift(&.{"lint"});
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "BROKEN  docs/missing.md (link target not found)");
+    try helpers.expectContains(result.stdout, "1 broken link");
+}
+
+
+test "lint checks broken links in discovered docs without drift bindings" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/plain.md", "# Plain\n\nSee [missing](missing.md).\n");
+    try repo.commit("add plain doc");
+
+    const result = try repo.runDrift(&.{"lint"});
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "docs/plain.md");
+    try helpers.expectContains(result.stdout, "BROKEN  docs/missing.md (link target not found)");
+}
+
+test "lint reports stale for markdown heading anchor when section changes" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/overview.md", "# Overview\n");
+    try repo.writeFile("docs/auth.md", "# Auth\n\n## Authentication\n\nUse tokens.\n");
+    try repo.commit("add docs");
+
+    const link_result = try repo.runDrift(&.{ "link", "docs/overview.md", "docs/auth.md#Authentication" });
+    defer link_result.deinit(allocator);
+    try helpers.expectExitCode(link_result.term, 0);
+    try repo.commit("link overview to auth heading");
+
+    try repo.writeFile("docs/auth.md", "# Auth\n\n## Authentication\n\nUse signed tokens.\n");
+    try repo.commit("update authentication docs");
+
+    const result = try repo.runDrift(&.{"lint"});
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "STALE   docs/auth.md#authentication (changed after doc)");
+}
+
+test "lint resolves duplicate heading slugs to the first matching section" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/overview.md", "# Overview\n");
+    try repo.writeFile(
+        "docs/auth.md",
+        "# Auth\n\n## Foo\n\nFirst body.\n\n## Foo\n\nSecond body.\n",
+    );
+    try repo.commit("add docs with duplicate headings");
+
+    const link_result = try repo.runDrift(&.{ "link", "docs/overview.md", "docs/auth.md#Foo" });
+    defer link_result.deinit(allocator);
+    try helpers.expectExitCode(link_result.term, 0);
+    try repo.commit("link duplicate heading");
+
+    try repo.writeFile(
+        "docs/auth.md",
+        "# Auth\n\n## Foo\n\nFirst body.\n\n## Foo\n\nSecond body changed.\n",
+    );
+    try repo.commit("change second duplicate heading only");
+
+    {
+        const result = try repo.runDrift(&.{"lint"});
+        defer result.deinit(allocator);
+        try helpers.expectExitCode(result.term, 0);
+        try helpers.expectContains(result.stdout, "docs/overview.md");
+        try helpers.expectContains(result.stdout, "ok");
+    }
+
+    try repo.writeFile(
+        "docs/auth.md",
+        "# Auth\n\n## Foo\n\nFirst body changed.\n\n## Foo\n\nSecond body changed.\n",
+    );
+    try repo.commit("change first duplicate heading");
+
+    {
+        const result = try repo.runDrift(&.{"lint"});
+        defer result.deinit(allocator);
+        try helpers.expectExitCode(result.term, 1);
+        try helpers.expectContains(result.stdout, "STALE   docs/auth.md#foo (changed after doc)");
+    }
+}
+
+test "check --format json reports broken links and heading anchors" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/overview.md", "# Overview\n\nSee [auth](auth.md#Authentication) and [missing](missing.md).\n");
+    try repo.writeFile("docs/auth.md", "# Auth\n\n## Authentication\n\nUse tokens.\n");
+    try repo.commit("add docs");
+
+    const link_result = try repo.runDrift(&.{ "link", "docs/overview.md", "docs/auth.md#Authentication" });
+    defer link_result.deinit(allocator);
+    try helpers.expectExitCode(link_result.term, 0);
+    try repo.commit("link overview heading anchor");
+
+    const result = try repo.runDrift(&.{ "check", "--format", "json" });
+    defer result.deinit(allocator);
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.validateDriftCheckJson(allocator, result.stdout);
+
+    const Payload = struct {
+        summary: struct {
+            result: []const u8,
+            links_total: u32,
+            links_broken: u32,
+        },
+        docs: []const struct {
+            path: []const u8,
+            result: []const u8,
+            anchors: []const struct {
+                kind: []const u8,
+                result: []const u8,
+            },
+            links: []const struct {
+                target: []const u8,
+                result: []const u8,
+                reason: ?struct { code: []const u8 },
+            },
+        },
+    };
+
+    var parsed = try std.json.parseFromSlice(Payload, allocator, result.stdout, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("fail", parsed.value.summary.result);
+    try std.testing.expectEqual(@as(u32, 2), parsed.value.summary.links_total);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.summary.links_broken);
+
+    var overview_index: ?usize = null;
+    for (parsed.value.docs, 0..) |doc, idx| {
+        if (std.mem.eql(u8, doc.path, "docs/overview.md")) {
+            overview_index = idx;
+            break;
+        }
+    }
+    const overview = parsed.value.docs[overview_index orelse return error.TestUnexpectedResult];
+    try std.testing.expectEqualStrings("broken", overview.result);
+    try std.testing.expectEqualStrings("heading", overview.anchors[0].kind);
+    try std.testing.expectEqualStrings("fresh", overview.anchors[0].result);
+    try std.testing.expectEqualStrings("auth.md#Authentication", overview.links[0].target);
+    try std.testing.expectEqualStrings("ok", overview.links[0].result);
+    try std.testing.expectEqualStrings("missing.md", overview.links[1].target);
+    try std.testing.expectEqualStrings("broken", overview.links[1].result);
+    try std.testing.expectEqualStrings("link_target_not_found", overview.links[1].reason.?.code);
+}
+
 test "lint --format json works as alias" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
