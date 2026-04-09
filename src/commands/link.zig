@@ -1,10 +1,11 @@
 const std = @import("std");
 const CommandContext = @import("../context.zig").CommandContext;
-const frontmatter = @import("../frontmatter.zig");
 const lockfile = @import("../lockfile.zig");
+const markdown = @import("../markdown.zig");
 const symbols = @import("../symbols.zig");
+const target = @import("../target.zig");
 
-pub const RunError = error{ DocReadFailed, DocWriteFailed, NoBindingsForDoc, CannotComputeFingerprint };
+pub const RunError = error{ DocReadFailed, NoBindingsForDoc, CannotComputeFingerprint, TargetNotFound, HeadingNotFound };
 
 pub fn run(
     ctx: CommandContext,
@@ -18,32 +19,31 @@ pub fn run(
     var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
-    const content = std.fs.cwd().readFileAlloc(ctx.run_arena, doc_path, 1024 * 1024) catch |err| {
+    _ = std.fs.cwd().readFileAlloc(ctx.scratch(), doc_path, 1024 * 1024) catch |err| {
         stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
         return error.DocReadFailed;
     };
-
-    ctx.resetScratch();
-    const normalized_doc_path = try normalizeSpecPath(ctx, lf.root_path, cwd_path, doc_path);
     ctx.resetScratch();
 
-    const parsed_legacy = try frontmatter.parseDriftDoc(ctx.run_arena, content);
-
-    if (parsed_legacy) |legacy| {
-        try migrateLegacyBindings(ctx, &lf, cwd_path, normalized_doc_path, legacy.anchors.items, legacy.origin);
-    }
+    const normalized_doc_path = try normalizeDocPath(ctx, lf.root_path, cwd_path, doc_path);
+    ctx.resetScratch();
 
     if (optional_anchor) |raw_anchor| {
-        ctx.resetScratch();
-        const normalized_target = try normalizeTargetPath(ctx, lf.root_path, cwd_path, raw_anchor);
+        const normalized_target = normalizeTargetPath(ctx, lf.root_path, cwd_path, raw_anchor) catch |err| switch (err) {
+            error.TargetNotFound => {
+                stderr_w.print("error: target not found: {s}\n", .{raw_anchor}) catch {};
+                return err;
+            },
+            error.HeadingNotFound => {
+                stderr_w.print("error: heading not found in target doc: {s}\n", .{raw_anchor}) catch {};
+                return err;
+            },
+            else => return err,
+        };
         ctx.resetScratch();
 
-        try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target, if (parsed_legacy) |legacy| legacy.origin else null);
+        try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target);
         try lockfile.writeFile(&lf, ctx.scratch());
-
-        if (parsed_legacy != null) {
-            try stripLegacySpecFile(ctx, doc_path, content, stderr_w);
-        }
 
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
         stdout_w.print("added {s} -> {s}", .{ normalized_doc_path, binding.target }) catch {};
@@ -61,34 +61,13 @@ pub fn run(
         relinked_any = true;
     }
 
-    if (!relinked_any and parsed_legacy == null) {
+    if (!relinked_any) {
         stderr_w.print("no bindings found for {s}\n", .{normalized_doc_path}) catch {};
         return error.NoBindingsForDoc;
     }
 
     try lockfile.writeFile(&lf, ctx.scratch());
-
-    if (parsed_legacy != null) {
-        try stripLegacySpecFile(ctx, doc_path, content, stderr_w);
-    }
-
     stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
-}
-
-fn migrateLegacyBindings(
-    ctx: CommandContext,
-    lf: *lockfile.Lockfile,
-    cwd_path: []const u8,
-    normalized_doc_path: []const u8,
-    legacy_anchors: []const []const u8,
-    origin: ?[]const u8,
-) !void {
-    for (legacy_anchors) |legacy_anchor| {
-        ctx.resetScratch();
-        const normalized_target = try normalizeTargetPath(ctx, lf.root_path, cwd_path, legacy_anchor);
-        ctx.resetScratch();
-        try upsertBinding(ctx, lf, cwd_path, normalized_doc_path, normalized_target, origin);
-    }
 }
 
 fn upsertBinding(
@@ -97,13 +76,9 @@ fn upsertBinding(
     cwd_path: []const u8,
     normalized_doc_path: []const u8,
     normalized_target: []const u8,
-    origin: ?[]const u8,
 ) !void {
     if (findBinding(lf.bindings.items, normalized_doc_path, normalized_target)) |binding| {
         try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
-        if (origin) |o| {
-            try binding.setField(ctx.run_arena, "origin", o);
-        }
         return;
     }
 
@@ -115,10 +90,6 @@ fn upsertBinding(
     errdefer binding.metadata.deinit(ctx.run_arena);
 
     try refreshBindingSig(ctx, cwd_path, lf.root_path, &binding);
-    if (origin) |o| {
-        try binding.setField(ctx.run_arena, "origin", o);
-    }
-
     try lf.bindings.append(ctx.run_arena, binding);
 }
 
@@ -137,40 +108,20 @@ fn computeTargetSigInto(
     ctx: CommandContext,
     cwd_path: []const u8,
     root_path: []const u8,
-    target: []const u8,
+    raw_target: []const u8,
     hex_out: *[16]u8,
 ) !void {
-    const identity = frontmatter.anchorFileIdentity(target);
-    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
-    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
-
-    const absolute_path = try resolveInputPath(ctx, root_path, cwd_path, file_part);
+    const parsed = target.parse(raw_target);
+    const absolute_path = try resolveInputPath(ctx, root_path, cwd_path, parsed.file_path);
     const content = try readResolvedFile(ctx, absolute_path);
-    if (!symbols.writeFingerprintHex(hex_out, content, file_part, symbol_name)) {
+    if (!symbols.writeFingerprintHex(hex_out, content, parsed.file_path, parsed.symbol_name)) {
         ctx.resetScratch();
         return error.CannotComputeFingerprint;
     }
     ctx.resetScratch();
 }
 
-fn stripLegacySpecFile(
-    ctx: CommandContext,
-    doc_path: []const u8,
-    content: []const u8,
-    stderr_w: *std.io.Writer,
-) !void {
-    const stripped = try frontmatter.stripLegacyDriftMetadata(ctx.run_arena, content);
-
-    const file = std.fs.cwd().createFile(doc_path, .{ .truncate = true }) catch |err| {
-        stderr_w.print("error: cannot write '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
-        return error.DocWriteFailed;
-    };
-    defer file.close();
-    try file.writeAll(stripped);
-}
-
-fn normalizeSpecPath(
+fn normalizeDocPath(
     ctx: CommandContext,
     root_path: []const u8,
     cwd_path: []const u8,
@@ -188,18 +139,34 @@ fn normalizeTargetPath(
     cwd_path: []const u8,
     raw_target: []const u8,
 ) ![]const u8 {
-    const identity = frontmatter.anchorFileIdentity(raw_target);
-    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
-    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
-
-    const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
-    ctx.resetScratch();
-
-    if (symbol_name) |symbol| {
-        return try std.fmt.allocPrint(ctx.run_arena, "{s}#{s}", .{ relative, symbol });
+    const parsed = target.parse(raw_target);
+    const absolute = try resolveInputPath(ctx, root_path, cwd_path, parsed.file_path);
+    if (!pathExists(absolute)) {
+        ctx.resetScratch();
+        return error.TargetNotFound;
     }
+
+    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+
+    if (parsed.symbol_name) |symbol| {
+        if (parsed.isHeading()) {
+            const content = try readResolvedFile(ctx, absolute);
+            const slug_buf = try ctx.scratch().alloc(u8, symbol.len);
+            const slug = markdown.headingToSlug(slug_buf, symbol);
+            if (!markdown.headingExists(content, slug)) {
+                ctx.resetScratch();
+                return error.HeadingNotFound;
+            }
+            const normalized = try std.fmt.allocPrint(ctx.run_arena, "{s}#{s}", .{ relative, slug });
+            ctx.resetScratch();
+            return normalized;
+        }
+        const normalized = try std.fmt.allocPrint(ctx.run_arena, "{s}#{s}", .{ relative, symbol });
+        ctx.resetScratch();
+        return normalized;
+    }
+
+    ctx.resetScratch();
     return relative;
 }
 
@@ -220,11 +187,7 @@ fn resolveInputPath(
 }
 
 fn pathExists(path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
-        std.fs.accessAbsolute(path, .{}) catch return false;
-        return true;
-    }
-    std.fs.cwd().access(path, .{}) catch return false;
+    std.fs.accessAbsolute(path, .{}) catch return false;
     return true;
 }
 
@@ -237,9 +200,9 @@ fn readResolvedFile(ctx: CommandContext, path: []const u8) ![]const u8 {
     return try std.fs.cwd().readFileAlloc(ctx.scratch(), path, 1024 * 1024);
 }
 
-fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, target: []const u8) ?*lockfile.Binding {
+fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, normalized_target: []const u8) ?*lockfile.Binding {
     for (bindings) |*binding| {
-        if (std.mem.eql(u8, binding.doc_path, doc_path) and std.mem.eql(u8, binding.target, target)) {
+        if (std.mem.eql(u8, binding.doc_path, doc_path) and std.mem.eql(u8, binding.target, normalized_target)) {
             return binding;
         }
     }

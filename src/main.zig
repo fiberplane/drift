@@ -178,7 +178,7 @@ pub fn main() !void {
             // Exit-on-stale lives here (not in lint.run) so all `defer`s in run unwind
             // before the process dies. std.process.exit calls libc exit, which does not
             // run Zig defers — putting the exit in run leaks the result model.
-            if (run_status == .stale) {
+            if (run_status == .fail) {
                 stdout_w.interface.flush() catch {};
                 stderr_w.interface.flush() catch {};
                 std.process.exit(1);
@@ -216,7 +216,10 @@ pub fn main() !void {
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| switch (err) {
-                error.DocReadFailed, error.DocWriteFailed, error.NoBindingsForDoc => {
+                error.DocReadFailed, error.NoBindingsForDoc => {
+                    fatal(&stderr_w.interface, "", .{});
+                },
+                error.TargetNotFound, error.HeadingNotFound => {
                     fatal(&stderr_w.interface, "", .{});
                 },
                 error.CannotComputeFingerprint => {
