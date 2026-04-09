@@ -1,21 +1,19 @@
-.claude/skills/drift/SKILL.md -> src/frontmatter.zig sig:5b6678b3877afcbb origin:github:fiberplane/drift
-.claude/skills/drift/SKILL.md -> src/main.zig sig:28d8968cf0ed7357 origin:github:fiberplane/drift
-.claude/skills/drift/SKILL.md -> src/scanner.zig sig:21eca899d9b517c1 origin:github:fiberplane/drift
+.claude/skills/drift/SKILL.md -> src/main.zig sig:a0933989333423fb origin:github:fiberplane/drift
 .claude/skills/drift/SKILL.md -> src/vcs.zig sig:2468937f00d5305a origin:github:fiberplane/drift
-CLAUDE.md -> build.zig sig:ffd4998d1da8c1b1
-CLAUDE.md -> src/main.zig sig:28d8968cf0ed7357
-docs/CLI.md -> src/commands/link.zig sig:a37de7a7f1e00a17
-docs/CLI.md -> src/commands/lint.zig sig:c4c3ccc66e586e31
-docs/CLI.md -> src/commands/refs.zig sig:e483629e2b4fb699
+CLAUDE.md -> build.zig sig:7194b38f39dbadba
+CLAUDE.md -> src/main.zig sig:a0933989333423fb
+docs/CLI.md -> src/commands/link.zig sig:f4ab9576ebef2981
+docs/CLI.md -> src/commands/lint.zig sig:a0237cda56055884
+docs/CLI.md -> src/commands/refs.zig sig:e3309a0d11c02bb0
 docs/CLI.md -> src/commands/status.zig sig:ab9cee37b4b22644
-docs/CLI.md -> src/commands/unlink.zig sig:bdafb1fd6ff055a9
+docs/CLI.md -> src/commands/unlink.zig sig:590c53a3920551d3
 docs/DESIGN.md -> src/context.zig sig:70678dcc0872470d
 docs/DESIGN.md -> src/lockfile.zig sig:f659df3e59325b71
-docs/DESIGN.md -> src/main.zig sig:28d8968cf0ed7357
-docs/DESIGN.md -> src/symbols.zig sig:838e73484e4ea520
+docs/DESIGN.md -> src/main.zig sig:a0933989333423fb
+docs/DESIGN.md -> src/symbols.zig sig:8e4a403c6f0130c3
 docs/DESIGN.md -> src/vcs.zig sig:2468937f00d5305a
 docs/RELEASING.md -> .github/workflows/ci.yml sig:e8440b1d7ee3e4ba
 docs/RELEASING.md -> .github/workflows/release.yml sig:f74d66b6bd7f959c
 docs/RELEASING.md -> cliff.toml sig:d2a8e301fe4b788e
-docs/check-json-schema.md -> docs/schemas/drift.check.v1.json sig:98d3af1bdc9e8561
-docs/check-json-schema.md -> src/payload/drift_check_v1.zig sig:ec796a0d49a948e3
+docs/check-json-schema.md -> docs/schemas/drift.check.v1.json sig:4e6d23b9945aebb1
+docs/check-json-schema.md -> src/payload/drift_check_v1.zig sig:d446ad53565b6916
