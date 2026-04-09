@@ -205,6 +205,16 @@ fn linkGrammars(b: *std.Build, module: *std.Build.Module) void {
             .parser_path = "src/parser.c",
             .scanner_path = null,
         },
+        .{
+            .dep_name = "tree_sitter_markdown",
+            .parser_path = "tree-sitter-markdown/src/parser.c",
+            .scanner_path = "tree-sitter-markdown/src/scanner.c",
+        },
+        .{
+            .dep_name = "tree_sitter_markdown",
+            .parser_path = "tree-sitter-markdown-inline/src/parser.c",
+            .scanner_path = "tree-sitter-markdown-inline/src/scanner.c",
+        },
     };
 
     for (grammars) |grammar| {
