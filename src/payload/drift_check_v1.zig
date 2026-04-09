@@ -25,6 +25,8 @@ pub const Summary = struct {
     anchors_fresh: u32,
     anchors_stale: u32,
     anchors_skipped: u32,
+    links_total: u32,
+    links_broken: u32,
 };
 
 pub const Doc = struct {
@@ -32,6 +34,7 @@ pub const Doc = struct {
     origin: ?[]const u8,
     result: []const u8,
     anchors: []const Anchor,
+    links: []const Link,
 };
 
 pub const Anchor = struct {
@@ -44,6 +47,13 @@ pub const Anchor = struct {
     result: []const u8,
     reason: ?Reason,
     blame: ?Blame,
+};
+
+pub const Link = struct {
+    target: []const u8,
+    line: u32,
+    result: []const u8,
+    reason: ?Reason,
 };
 
 pub const Provenance = struct {
@@ -95,6 +105,7 @@ fn validateSummary(s: Summary) ValidateJsonError!void {
 
     const anchor_sum = @as(u64, s.anchors_fresh) + @as(u64, s.anchors_stale) + @as(u64, s.anchors_skipped);
     if (anchor_sum != s.anchors_total) return error.BadDriftCheckPayload;
+    if (s.links_broken > s.links_total) return error.BadDriftCheckPayload;
 
     // Coverage label must match counts; see docs/check-json-schema.md (summary).
     if (std.mem.eql(u8, s.verification_state, "none")) {
@@ -111,15 +122,18 @@ fn validateSummary(s: Summary) ValidateJsonError!void {
 
 fn validateDoc(doc: Doc) ValidateJsonError!void {
     if (doc.path.len == 0) return error.BadDriftCheckPayload;
-    try oneOf(doc.result, &.{ "fresh", "stale", "skip" });
+    try oneOf(doc.result, &.{ "fresh", "stale", "skip", "broken" });
     for (doc.anchors) |a| {
         try validateAnchor(a);
+    }
+    for (doc.links) |l| {
+        try validateLink(l);
     }
 }
 
 fn validateAnchor(a: Anchor) ValidateJsonError!void {
     if (a.identity.len == 0 or a.raw.len == 0 or a.path.len == 0) return error.BadDriftCheckPayload;
-    try oneOf(a.kind, &.{ "file", "symbol" });
+    try oneOf(a.kind, &.{ "file", "symbol", "heading" });
     try oneOf(a.result, &.{ "fresh", "stale", "skip" });
 
     if (a.provenance) |pr| {
@@ -133,6 +147,16 @@ fn validateAnchor(a: Anchor) ValidateJsonError!void {
         if (b.author.len == 0 or b.commit.len == 0 or b.date.len == 0 or b.subject.len == 0) {
             return error.BadDriftCheckPayload;
         }
+    }
+}
+
+fn validateLink(link: Link) ValidateJsonError!void {
+    if (link.target.len == 0 or link.line == 0) return error.BadDriftCheckPayload;
+    try oneOf(link.result, &.{ "ok", "broken" });
+    if (std.mem.eql(u8, link.result, "ok")) {
+        if (link.reason != null) return error.BadDriftCheckPayload;
+    } else if (link.reason == null) {
+        return error.BadDriftCheckPayload;
     }
 }
 

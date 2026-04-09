@@ -54,6 +54,7 @@ fn buildDocument(a: std.mem.Allocator) !json.Value {
     try defs.put("summary", .{ .object = try defSummary(a) });
     try defs.put("doc", .{ .object = try defDoc(a) });
     try defs.put("anchor", .{ .object = try defAnchor(a) });
+    try defs.put("link", .{ .object = try defLink(a) });
     try defs.put("provenance", .{ .object = try defProvenance(a) });
     try defs.put("reason", .{ .object = try defReason(a) });
     try defs.put("blame", .{ .object = try defBlame(a) });
@@ -134,7 +135,7 @@ fn defSummary(a: std.mem.Allocator) !json.ObjectMap {
     try result.put("type", .{ .string = "string" });
     try result.put("enum", try stringArray(a, &.{ "pass", "fail" }));
     try result.put("description", .{ .string = 
-        \\fail iff any anchor is stale; mirrors process exit code (0 pass, 1 fail).
+        \\fail iff any anchor is stale or any link is broken; mirrors process exit code (0 pass, 1 fail).
     });
     try props.put("result", .{ .object = result });
 
@@ -159,6 +160,8 @@ fn defSummary(a: std.mem.Allocator) !json.ObjectMap {
     try props.put("anchors_fresh", .{ .object = try uintSchema(a) });
     try props.put("anchors_stale", .{ .object = try uintSchema(a) });
     try props.put("anchors_skipped", .{ .object = try uintSchema(a) });
+    try props.put("links_total", .{ .object = try uintSchema(a) });
+    try props.put("links_broken", .{ .object = try uintSchema(a) });
 
     try o.put("properties", .{ .object = props });
     return o;
@@ -172,12 +175,12 @@ fn defDoc(a: std.mem.Allocator) !json.ObjectMap {
     var props = json.ObjectMap.init(a);
     try props.put("path", .{ .object = try stringType(a) });
     try props.put("origin", try nullableStringDesc(a,
-        \\Doc drift.origin frontmatter when present.
+        \\Common origin qualifier for the doc's bindings when present, else null.
     ));
     var res = json.ObjectMap.init(a);
     try res.put("type", .{ .string = "string" });
-    try res.put("enum", try stringArray(a, &.{ "fresh", "stale", "skip" }));
-    try res.put("description", .{ .string = "Worst of child anchors; zero anchors => fresh." });
+    try res.put("enum", try stringArray(a, &.{ "fresh", "stale", "skip", "broken" }));
+    try res.put("description", .{ .string = "Worst of child anchors and links; broken > stale > skip > fresh." });
     try props.put("result", .{ .object = res });
     var anchors = json.ObjectMap.init(a);
     try anchors.put("type", .{ .string = "array" });
@@ -185,6 +188,12 @@ fn defDoc(a: std.mem.Allocator) !json.ObjectMap {
     try ar.put("$ref", .{ .string = "#/$defs/anchor" });
     try anchors.put("items", .{ .object = ar });
     try props.put("anchors", .{ .object = anchors });
+    var links = json.ObjectMap.init(a);
+    try links.put("type", .{ .string = "array" });
+    var lr = json.ObjectMap.init(a);
+    try lr.put("$ref", .{ .string = "#/$defs/link" });
+    try links.put("items", .{ .object = lr });
+    try props.put("links", .{ .object = links });
     try o.put("properties", .{ .object = props });
     return o;
 }
@@ -214,7 +223,7 @@ fn defAnchor(a: std.mem.Allocator) !json.ObjectMap {
 
     var kind = json.ObjectMap.init(a);
     try kind.put("type", .{ .string = "string" });
-    try kind.put("enum", try stringArray(a, &.{ "file", "symbol" }));
+    try kind.put("enum", try stringArray(a, &.{ "file", "symbol", "heading" }));
     try props.put("kind", .{ .object = kind });
 
     try props.put("path", .{ .object = try stringType(a) });
@@ -261,6 +270,33 @@ fn defAnchor(a: std.mem.Allocator) !json.ObjectMap {
     try btypes.append(.{ .object = bref });
     try blame.put("type", .{ .array = btypes });
     try props.put("blame", .{ .object = blame });
+
+    try o.put("properties", .{ .object = props });
+    return o;
+}
+
+fn defLink(a: std.mem.Allocator) !json.ObjectMap {
+    var o = json.ObjectMap.init(a);
+    try o.put("type", .{ .string = "object" });
+    try o.put("additionalProperties", .{ .bool = true });
+    try o.put("required", try requiredNamesArray(a, P.Link));
+    var props = json.ObjectMap.init(a);
+    try props.put("target", .{ .object = try stringType(a) });
+    try props.put("line", .{ .object = try uintSchema(a) });
+    var result = json.ObjectMap.init(a);
+    try result.put("type", .{ .string = "string" });
+    try result.put("enum", try stringArray(a, &.{ "ok", "broken" }));
+    try props.put("result", .{ .object = result });
+
+    var reason = json.ObjectMap.init(a);
+    try reason.put("description", .{ .string = "null when link result is ok." });
+    var rtypes = json.Array.init(a);
+    try rtypes.append(.{ .string = "null" });
+    var rref = json.ObjectMap.init(a);
+    try rref.put("$ref", .{ .string = "#/$defs/reason" });
+    try rtypes.append(.{ .object = rref });
+    try reason.put("type", .{ .array = rtypes });
+    try props.put("reason", .{ .object = reason });
 
     try o.put("properties", .{ .object = props });
     return o;
