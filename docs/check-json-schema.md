@@ -5,7 +5,7 @@ JSON document on stdout describing the result of a check run. The schema is iden
 by the `schema_version` field. Consumers should match on that exact string and treat
 unknown fields as forward-compatible additions.
 
-Process exit code is independent of format: **0 if no anchor is stale, 1 otherwise.**
+Process exit code is independent of format: **0 if no anchor is stale and no link is broken, 1 otherwise.**
 Errors writing the JSON payload (broken pipe, encoder failure) cause a non-zero exit
 rather than a silently truncated document.
 
@@ -66,12 +66,14 @@ fields remain valid without updating the schema file immediately.
   "anchors_total": 7,
   "anchors_fresh": 5,
   "anchors_stale": 0,
-  "anchors_skipped": 2
+  "anchors_skipped": 2,
+  "links_total": 12,
+  "links_broken": 1
 }
 ```
 
-- `result` is `"fail"` iff any anchor is stale; otherwise `"pass"`. This mirrors the
-  process exit code.
+- `result` is `"fail"` iff any anchor is stale or any link is broken; otherwise `"pass"`.
+  This mirrors the process exit code.
 - `verification_state` describes **coverage**: how much of the discovered work was
   actually verified versus skipped (e.g. origin mismatch).
   - `"none"`: `docs_total > 0` but `docs_checked == 0` — every doc was skipped, so
@@ -82,6 +84,8 @@ fields remain valid without updating the schema file immediately.
   - `"full"`: nothing was skipped (`docs_skipped == 0`), including the case
     `docs_total == 0` (no docs to skip).
 - `docs_checked` is `docs_fresh + docs_stale` — docs that were not skipped.
+- `links_total` counts all relative markdown links found in checked docs.
+- `links_broken` counts links whose target file does not exist.
 - All counts are non-negative integers;
   `docs_fresh + docs_stale + docs_skipped == docs_total`.
 
@@ -91,13 +95,26 @@ fields remain valid without updating the schema file immediately.
 {
   "path": "docs/auth.md",
   "origin": "github:owner/name" | null,
-  "result": "fresh" | "stale" | "skip",
-  "anchors": [ ... ]
+  "result": "fresh" | "stale" | "skip" | "broken",
+  "anchors": [ ... ],
+  "links": [ ... ]
 }
 ```
 
-A doc's `result` is the worst of its anchors (`stale > skip > fresh`). A doc with
-zero anchors is `"fresh"`.
+A doc's `result` is the worst of its anchors and links (`broken > stale > skip > fresh`). A doc with zero anchors and zero broken links is `"fresh"`.
+
+### `docs[*].links[*]`
+
+```json
+{
+  "target": "docs/old-guide.md",
+  "line": 42,
+  "result": "ok" | "broken",
+  "reason": { "code": "link_target_not_found", "message": "link target not found" } | null
+}
+```
+
+Each entry represents a relative markdown link extracted from the doc via tree-sitter. `target` is the link destination as written in the markdown. `line` is the 1-based line number of the link in the source file. `result` is `"ok"` if the target file exists, `"broken"` if it does not. `reason` is `null` for ok links and populated for broken ones.
 
 ## `docs[*].anchors[*]`
 
@@ -105,7 +122,7 @@ zero anchors is `"fresh"`.
 {
   "identity": "src/auth/login.ts#login",
   "raw": "src/auth/login.ts#login@sig:1f0ab611cebf2ea0",
-  "kind": "symbol" | "file",
+  "kind": "symbol" | "file" | "heading",
   "path": "src/auth/login.ts",
   "symbol": "login" | null,
   "provenance": { "kind": "sig" | "vcs", "value": "1f0ab611cebf2ea0" } | null,
@@ -118,7 +135,7 @@ zero anchors is `"fresh"`.
 - `identity` is the anchor stripped of its `@provenance` suffix — stable, used by the
   link/unlink commands as the canonical anchor handle.
 - `raw` is the original anchor string from the doc, suffix included.
-- `kind` is `"symbol"` if `identity` contains a `#`, else `"file"`.
+- `kind` is `"heading"` if the target is a `.md` file with a `#Fragment` (doc-to-doc anchor), `"symbol"` if it contains a `#` and the target is a code file, else `"file"`. For heading anchors, `path` contains the doc path and `symbol` contains the heading text.
 - `provenance.kind` is `"sig"` for content fingerprints (`@sig:hex`) or `"vcs"` for a
   raw commit hash. `null` when the anchor has no provenance suffix.
 - `reason` is `null` for fresh anchors. For stale/skipped anchors, `code` is one of the
@@ -140,6 +157,7 @@ zero anchors is `"fresh"`.
 | `fingerprint_unavailable` | A `@sig:` anchor could not be re-fingerprinted (e.g. unknown language). |
 | `baseline_unavailable` | Reserved — historical baseline could not be retrieved. (Not currently emitted; held for forward compatibility.) |
 | `origin_mismatch` | The doc's `origin:` does not match the current repo identity. Anchors are skipped. |
+| `link_target_not_found` | A plain markdown link in the doc points to a file that doesn't exist. |
 
 `reason.message` strings are stable in `v1` and asserted by tests. Changing one is a
 schema bump.
@@ -176,7 +194,9 @@ This is `drift.check.v1`. Within this identifier:
     "anchors_total": 1,
     "anchors_fresh": 0,
     "anchors_stale": 1,
-    "anchors_skipped": 0
+    "anchors_skipped": 0,
+    "links_total": 0,
+    "links_broken": 0
   },
   "docs": [{
     "path": "docs/auth.md",
@@ -197,7 +217,8 @@ This is `drift.check.v1`. Within this identifier:
         "date": "2026-04-07T14:22:00+00:00",
         "subject": "refactor: rename login handler"
       }
-    }]
+    }],
+    "links": []
   }]
 }
 ```

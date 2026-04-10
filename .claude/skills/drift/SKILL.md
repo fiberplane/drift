@@ -89,20 +89,18 @@ Someone changed bound code without updating docs. Read the lint output to see wh
 
 ## Anchor syntax
 
-Bindings in `drift.lock` (primary format):
+Bindings in `drift.lock`:
 ```
 docs/auth.md -> src/auth/login.ts sig:a1b2c3d4e5f6a7b8
 docs/auth.md -> src/auth/provider.ts#AuthConfig sig:c3d4e5f6a7b8a1b2
+docs/overview.md -> docs/auth.md#authentication sig:b3c4d5e6f7a8b9c0
 ```
 
-Inline references in doc body:
-```markdown
-The auth flow uses @./src/auth/provider.ts#AuthConfig for validation.
-```
+Anchors can target code files, code symbols (`file#Symbol`), or doc headings (`doc.md#heading-slug`). Heading fragments use GitHub-style slugs (lowercase, hyphens).
 
-`drift link` writes bindings to `drift.lock` and stamps inline anchors with content signatures (`sig:<hex>`). Content signatures are AST fingerprints of the target, so staleness detection works without querying VCS history. This means `drift link` works on uncommitted files — no need to commit first.
+`drift link` writes bindings to `drift.lock` with content signatures (`sig:<hex>`). Content signatures are AST fingerprints of the target, so staleness detection works without querying VCS history. This means `drift link` works on uncommitted files — no need to commit first.
 
-If a doc has legacy embedded anchors (YAML frontmatter or `<!-- drift: -->` HTML comments), `drift link` migrates them to `drift.lock` and strips the embedded metadata.
+`drift lint` also checks all markdown links (`[text](path.md)`) in drift-managed docs for existence — broken links are reported as `BROKEN` without needing a lockfile entry.
 
 ## Cross-repo docs (origin)
 

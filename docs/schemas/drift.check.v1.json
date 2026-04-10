@@ -64,7 +64,9 @@
         "anchors_total",
         "anchors_fresh",
         "anchors_stale",
-        "anchors_skipped"
+        "anchors_skipped",
+        "links_total",
+        "links_broken"
       ],
       "properties": {
         "result": {
@@ -73,7 +75,7 @@
             "pass",
             "fail"
           ],
-          "description": "fail iff any anchor is stale; mirrors process exit code (0 pass, 1 fail)."
+          "description": "fail iff any anchor is stale or any link is broken; mirrors process exit code (0 pass, 1 fail)."
         },
         "verification_state": {
           "type": "string",
@@ -120,6 +122,14 @@
         "anchors_skipped": {
           "type": "integer",
           "minimum": 0
+        },
+        "links_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "links_broken": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -130,14 +140,15 @@
         "path",
         "origin",
         "result",
-        "anchors"
+        "anchors",
+        "links"
       ],
       "properties": {
         "path": {
           "type": "string"
         },
         "origin": {
-          "description": "Doc drift.origin frontmatter when present.",
+          "description": "Common origin qualifier for the doc's bindings when present, else null.",
           "type": [
             "string",
             "null"
@@ -148,14 +159,21 @@
           "enum": [
             "fresh",
             "stale",
-            "skip"
+            "skip",
+            "broken"
           ],
-          "description": "Worst of child anchors; zero anchors => fresh."
+          "description": "Worst of child anchors and links; broken > stale > skip > fresh."
         },
         "anchors": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/anchor"
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/link"
           }
         }
       }
@@ -187,7 +205,8 @@
           "type": "string",
           "enum": [
             "file",
-            "symbol"
+            "symbol",
+            "heading"
           ]
         },
         "path": {
@@ -232,6 +251,41 @@
             "null",
             {
               "$ref": "#/$defs/blame"
+            }
+          ]
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "target",
+        "line",
+        "result",
+        "reason"
+      ],
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "broken"
+          ]
+        },
+        "reason": {
+          "description": "null when link result is ok.",
+          "type": [
+            "null",
+            {
+              "$ref": "#/$defs/reason"
             }
           ]
         }

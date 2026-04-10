@@ -26,6 +26,8 @@ test "validateJsonDocument rejects verification_state full when docs_skipped non
         .anchors_fresh = 0,
         .anchors_stale = 0,
         .anchors_skipped = 0,
+        .links_total = 0,
+        .links_broken = 0,
     })));
 }
 
@@ -42,6 +44,8 @@ test "validateJsonDocument rejects verification_state none when docs_total zero"
         .anchors_fresh = 0,
         .anchors_stale = 0,
         .anchors_skipped = 0,
+        .links_total = 0,
+        .links_broken = 0,
     })));
 }
 
@@ -58,6 +62,8 @@ test "validateJsonDocument rejects verification_state partial when nothing skipp
         .anchors_fresh = 0,
         .anchors_stale = 0,
         .anchors_skipped = 0,
+        .links_total = 0,
+        .links_broken = 0,
     })));
 }
 
@@ -74,5 +80,7 @@ test "validateJsonDocument accepts verification_state full with zero docs" {
         .anchors_fresh = 0,
         .anchors_stale = 0,
         .anchors_skipped = 0,
+        .links_total = 0,
+        .links_broken = 0,
     }));
 }

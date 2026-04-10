@@ -13,7 +13,7 @@
 
 ## Architecture
 
-drift binds markdown docs to code and lints for staleness. No daemon, no index, no cache. Every `drift lint` run is stateless: read docs, parse referenced files on demand, hash symbols, query VCS, report.
+drift binds markdown docs to code and lints for staleness. No daemon, no index, no cache. Every `drift lint` run is stateless: read docs, parse referenced files on demand, hash symbols, extract and check markdown links, query VCS, report.
 
 Reference: docs/DESIGN.md, docs/DECISIONS.md, docs/CLI.md, docs/RELEASING.md
 
@@ -43,6 +43,8 @@ Reference: docs/DESIGN.md, docs/DECISIONS.md, docs/CLI.md, docs/RELEASING.md
 3. Add extern declaration + extension mapping in `src/parse/Language.zig`
 4. Write `src/queries/<language>.scm` with symbol capture patterns
 5. Add test fixture
+
+Markdown is a supported language with a two-grammar architecture: block grammar for document structure (`section`, `atx_heading`) and inline grammar for link extraction (`inline_link`). Both grammars are separate `ts.Language` instances compiled from `tree-sitter-markdown`.
 
 ## Adding a Command
 

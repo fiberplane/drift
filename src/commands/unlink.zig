@@ -1,7 +1,7 @@
 const std = @import("std");
 const CommandContext = @import("../context.zig").CommandContext;
-const frontmatter = @import("../frontmatter.zig");
 const lockfile = @import("../lockfile.zig");
+const target = @import("../target.zig");
 
 pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, doc_path: []const u8, anchor: []const u8) !void {
     _ = stderr_w;
@@ -57,10 +57,9 @@ fn normalizeTargetPath(
     cwd_path: []const u8,
     raw_target: []const u8,
 ) ![]const u8 {
-    const identity = frontmatter.anchorFileIdentity(raw_target);
-    const hash_pos = std.mem.indexOfScalar(u8, identity, '#');
-    const file_part = if (hash_pos) |pos| identity[0..pos] else identity;
-    const symbol_name = if (hash_pos) |pos| identity[pos + 1 ..] else null;
+    const parsed = target.parse(raw_target);
+    const file_part = parsed.file_path;
+    const symbol_name = parsed.symbol_name;
 
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
     const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
