@@ -91,6 +91,16 @@ pub fn headingExists(source: []const u8, heading_fragment: []const u8) bool {
     return findHeadingSection(block_tree.rootNode(), source, heading_fragment) != null;
 }
 
+/// Extract the byte range [start, end) of a heading section matching the given fragment.
+/// Returns null if the heading is not found or parsing fails.
+pub fn extractHeadingSectionContent(source: []const u8, heading_fragment: []const u8) ?[2]u32 {
+    const block_tree = parseBlockTree(source) orelse return null;
+    defer block_tree.destroy();
+
+    const section = findHeadingSection(block_tree.rootNode(), source, heading_fragment) orelse return null;
+    return .{ section.startByte(), section.endByte() };
+}
+
 fn parseBlockTree(source: []const u8) ?*ts.Tree {
     const parser = ts.Parser.create();
     defer parser.destroy();

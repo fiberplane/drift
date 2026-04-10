@@ -62,6 +62,7 @@ fn parseFormat(maybe_value: ?[]const u8, stderr_w: *std.Io.Writer) lint.Format {
 }
 
 const link_params = clap.parseParamsComptime(
+    \\--doc-is-still-accurate
     \\<doc>
     \\
 );
@@ -203,19 +204,31 @@ pub fn main() !void {
         .link => {
             var sub = parseExOrReport(&link_params, link_parsers, allocator, &diag, &stderr_w.interface, &iter, 0);
             defer sub.deinit();
+            var doc_is_still_accurate = sub.args.@"doc-is-still-accurate" != 0;
             const doc_path = sub.positionals[0] orelse {
-                fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor]\n", .{});
+                fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor] [--doc-is-still-accurate]\n", .{});
             };
-            const optional_anchor = iter.next();
-            if (iter.next()) |_| {
-                fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor]\n", .{});
+            // Remaining args after the first positional: optional anchor and/or --doc-is-still-accurate
+            var optional_anchor: ?[]const u8 = null;
+            var remaining: u8 = 0;
+            while (iter.next()) |arg| {
+                if (std.mem.eql(u8, arg, "--doc-is-still-accurate")) {
+                    doc_is_still_accurate = true;
+                } else if (optional_anchor == null) {
+                    optional_anchor = arg;
+                } else {
+                    remaining += 1;
+                }
+            }
+            if (remaining > 0) {
+                fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor] [--doc-is-still-accurate]\n", .{});
             }
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
             var scratch_arena = std.heap.ArenaAllocator.init(allocator);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor) catch |err| switch (err) {
+            link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor, doc_is_still_accurate) catch |err| switch (err) {
                 error.DocReadFailed, error.NoBindingsForDoc => {
                     fatal(&stderr_w.interface, "", .{});
                 },
@@ -224,6 +237,9 @@ pub fn main() !void {
                 },
                 error.CannotComputeFingerprint => {
                     fatal(&stderr_w.interface, "error: cannot compute fingerprint for anchor in '{s}'\n", .{doc_path});
+                },
+                error.DocUnchanged => {
+                    fatal(&stderr_w.interface, "", .{});
                 },
                 else => exitWithError(&stderr_w.interface, err),
             };
@@ -278,7 +294,7 @@ fn printUsage(w: *std.io.Writer) void {
         \\Commands:
         \\  check     Check all docs for staleness  [--format text|json] [--changed <path>]
         \\  status    Show all docs and their anchors  [--format text|json]
-        \\  link      Add anchors to a doc
+        \\  link      Add anchors to a doc  [--doc-is-still-accurate]
         \\  unlink    Remove anchors from a doc
         \\  refs      Show which docs reference a target
         \\
