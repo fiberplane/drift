@@ -1,12 +1,12 @@
-.claude/skills/drift/SKILL.md -> src/main.zig sig:1ab7abe76bde7d40 origin:github:fiberplane/drift doc:f3ebc3b76e0e42ed
+.claude/skills/drift/SKILL.md -> src/main.zig sig:293b2dd6f549640e origin:github:fiberplane/drift doc:f3ebc3b76e0e42ed
 .claude/skills/drift/SKILL.md -> src/vcs.zig sig:2468937f00d5305a origin:github:fiberplane/drift doc:f3ebc3b76e0e42ed
-CLAUDE.md -> build.zig sig:7194b38f39dbadba
-CLAUDE.md -> src/main.zig sig:a0933989333423fb
-docs/CLI.md -> src/commands/link.zig sig:f4ab9576ebef2981
-docs/CLI.md -> src/commands/lint.zig sig:a0237cda56055884
-docs/CLI.md -> src/commands/refs.zig sig:e3309a0d11c02bb0
-docs/CLI.md -> src/commands/status.zig sig:ab9cee37b4b22644
-docs/CLI.md -> src/commands/unlink.zig sig:590c53a3920551d3
+CLAUDE.md -> build.zig sig:7194b38f39dbadba doc:9d19d0097f56fe9b
+CLAUDE.md -> src/main.zig sig:293b2dd6f549640e doc:9d19d0097f56fe9b
+docs/CLI.md -> src/commands/link.zig sig:152208e2069486aa doc:a8befc9e6034290f
+docs/CLI.md -> src/commands/lint.zig sig:a0237cda56055884 doc:a8befc9e6034290f
+docs/CLI.md -> src/commands/refs.zig sig:e3309a0d11c02bb0 doc:a8befc9e6034290f
+docs/CLI.md -> src/commands/status.zig sig:ab9cee37b4b22644 doc:a8befc9e6034290f
+docs/CLI.md -> src/commands/unlink.zig sig:590c53a3920551d3 doc:a8befc9e6034290f
 docs/DESIGN.md -> src/context.zig sig:70678dcc0872470d doc:8a5ec5123fb76d48
 docs/DESIGN.md -> src/lockfile.zig sig:f659df3e59325b71 doc:8a5ec5123fb76d48
 docs/DESIGN.md -> src/main.zig sig:293b2dd6f549640e doc:8a5ec5123fb76d48
