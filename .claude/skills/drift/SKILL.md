@@ -11,9 +11,15 @@ drift binds markdown docs to code and lints for staleness.
 
 When you change code without updating the docs that describe it, those docs become stale. Stale docs get loaded as context in future sessions and produce wrong code based on wrong descriptions. This compounds — each session that trusts a stale doc makes things worse. drift makes the anchor explicit and enforceable so this feedback loop breaks.
 
-## CRITICAL: never relink without reviewing
+## Relink gate
 
-`drift link` refreshes provenance — it tells drift "I've reviewed this code and the doc is accurate." If you relink without actually updating the doc prose to match the code change, you are lying to every future session that loads that doc. Read the stale report, understand what changed, update the prose, THEN relink.
+`drift link` refuses to restamp a stale anchor if the doc hasn't changed. When a target's signature has drifted, `drift link` prints both sides — the doc section (spec) and the current code — then exits 1 if the doc content hash matches the stored baseline.
+
+This means you cannot blindly relink. You must update the doc prose first, then relink. If after reviewing you determine the doc is genuinely still accurate, use:
+
+```bash
+drift link docs/auth.md --doc-is-still-accurate
+```
 
 ## After you change code
 
@@ -30,10 +36,11 @@ drift check
 ```
 
 If a doc is stale because of your change:
-1. Read the blame info to understand what changed and why
-2. Update the doc's prose to reflect what you changed
-3. Refresh provenance: `drift link <doc-path> <file-you-changed>`
-4. Verify: `drift check`
+1. Run `drift link <doc-path>` — it will print the doc section and current code side by side, then refuse
+2. Read both sides to understand what's out of sync
+3. Update the doc's prose to reflect what you changed
+4. Run `drift link <doc-path>` again — succeeds now that the doc has changed
+5. Verify: `drift check`
 
 Do not skip this. Leaving a doc stale is worse than leaving it unwritten.
 
@@ -91,14 +98,16 @@ Someone changed bound code without updating docs. Read the lint output to see wh
 
 Bindings in `drift.lock`:
 ```
-docs/auth.md -> src/auth/login.ts sig:a1b2c3d4e5f6a7b8
-docs/auth.md -> src/auth/provider.ts#AuthConfig sig:c3d4e5f6a7b8a1b2
-docs/overview.md -> docs/auth.md#authentication sig:b3c4d5e6f7a8b9c0
+docs/auth.md -> src/auth/login.ts sig:a1b2c3d4e5f6a7b8 doc:1122334455667788
+docs/auth.md -> src/auth/provider.ts#AuthConfig sig:c3d4e5f6a7b8a1b2 doc:1122334455667788
+docs/overview.md -> docs/auth.md#authentication sig:b3c4d5e6f7a8b9c0 doc:aabbccddee001122
 ```
 
 Anchors can target code files, code symbols (`file#Symbol`), or doc headings (`doc.md#heading-slug`). Heading fragments use GitHub-style slugs (lowercase, hyphens).
 
 `drift link` writes bindings to `drift.lock` with content signatures (`sig:<hex>`). Content signatures are AST fingerprints of the target, so staleness detection works without querying VCS history. This means `drift link` works on uncommitted files — no need to commit first.
+
+`drift link` also stores a `doc:<hex>` hash of the doc's content at link time. This powers the relink gate — if the doc hasn't changed since the last link, `drift link` refuses to restamp stale anchors.
 
 `drift lint` also checks all markdown links (`[text](path.md)`) in drift-managed docs for existence — broken links are reported as `BROKEN` without needing a lockfile entry.
 

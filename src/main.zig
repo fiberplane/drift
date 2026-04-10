@@ -210,17 +210,17 @@ pub fn main() !void {
             };
             // Remaining args after the first positional: optional anchor and/or --doc-is-still-accurate
             var optional_anchor: ?[]const u8 = null;
-            var remaining: u8 = 0;
+            var has_extra_args = false;
             while (iter.next()) |arg| {
                 if (std.mem.eql(u8, arg, "--doc-is-still-accurate")) {
                     doc_is_still_accurate = true;
                 } else if (optional_anchor == null) {
                     optional_anchor = arg;
                 } else {
-                    remaining += 1;
+                    has_extra_args = true;
                 }
             }
-            if (remaining > 0) {
+            if (has_extra_args) {
                 fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor] [--doc-is-still-accurate]\n", .{});
             }
             var run_arena = std.heap.ArenaAllocator.init(allocator);

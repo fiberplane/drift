@@ -30,6 +30,9 @@ pub fn run(
     const normalized_doc_path = try normalizeDocPath(ctx, lf.root_path, cwd_path, doc_path);
     ctx.resetScratch();
 
+    var doc_hex: [16]u8 = undefined;
+    _ = std.fmt.bufPrint(&doc_hex, "{x:0>16}", .{computeDocHash(doc_content)}) catch unreachable;
+
     if (optional_anchor) |raw_anchor| {
         const normalized_target = normalizeTargetPath(ctx, lf.root_path, cwd_path, raw_anchor) catch |err| switch (err) {
             error.TargetNotFound => {
@@ -50,22 +53,7 @@ pub fn run(
         try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target);
 
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
-        const new_sig = binding.fieldValue("sig");
-        const was_stale = if (old_sig) |os| if (new_sig) |ns| !std.mem.eql(u8, os, ns) else true else false;
-
-        var doc_hex: [16]u8 = undefined;
-        _ = std.fmt.bufPrint(&doc_hex, "{x:0>16}", .{computeDocHash(doc_content)}) catch unreachable;
-
-        if (was_stale and !doc_is_still_accurate) {
-            if (binding.fieldValue("doc")) |stored_doc| {
-                if (std.mem.eql(u8, stored_doc, &doc_hex)) {
-                    printStaleContext(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, normalized_target);
-                    stderr_w.print("refused: {s} -> {s} — doc unchanged since target was modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{ doc_path, normalized_target }) catch {};
-                    return error.DocUnchanged;
-                }
-            }
-        }
-
+        try checkDocGate(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, &doc_hex, binding, old_sig, doc_is_still_accurate);
         try binding.setField(ctx.run_arena, "doc", &doc_hex);
 
         try lockfile.writeFile(&lf, ctx.scratch());
@@ -78,27 +66,16 @@ pub fn run(
         return;
     }
 
-    var doc_hex: [16]u8 = undefined;
-    _ = std.fmt.bufPrint(&doc_hex, "{x:0>16}", .{computeDocHash(doc_content)}) catch unreachable;
-
     var relinked_any = false;
     var stale_and_unchanged = false;
     for (lf.bindings.items) |*binding| {
         if (!std.mem.eql(u8, binding.doc_path, normalized_doc_path)) continue;
         const old_sig = binding.fieldValue("sig");
         try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
-        const new_sig = binding.fieldValue("sig");
-        const was_stale = if (old_sig) |os| if (new_sig) |ns| !std.mem.eql(u8, os, ns) else true else false;
 
-        if (was_stale and !doc_is_still_accurate) {
-            if (binding.fieldValue("doc")) |stored_doc| {
-                if (std.mem.eql(u8, stored_doc, &doc_hex)) {
-                    printStaleContext(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, binding.target);
-                    stderr_w.print("refused: {s} -> {s} — doc unchanged since target was modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{ doc_path, binding.target }) catch {};
-                    stale_and_unchanged = true;
-                }
-            }
-        }
+        checkDocGate(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, &doc_hex, binding, old_sig, doc_is_still_accurate) catch {
+            stale_and_unchanged = true;
+        };
 
         if (!stale_and_unchanged) {
             try binding.setField(ctx.run_arena, "doc", &doc_hex);
@@ -119,6 +96,35 @@ pub fn run(
     stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
 }
 
+/// Check whether a relink should be refused because the target changed but
+/// the doc didn't. Returns `error.DocUnchanged` when the gate triggers.
+fn checkDocGate(
+    ctx: CommandContext,
+    stderr_w: *std.io.Writer,
+    root_path: []const u8,
+    cwd_path: []const u8,
+    doc_path: []const u8,
+    doc_content: []const u8,
+    doc_hex: *const [16]u8,
+    binding: *lockfile.Binding,
+    old_sig: ?[]const u8,
+    doc_is_still_accurate: bool,
+) !void {
+    const was_stale = blk: {
+        const os = old_sig orelse break :blk false;
+        const ns = binding.fieldValue("sig") orelse break :blk true;
+        break :blk !std.mem.eql(u8, os, ns);
+    };
+    if (!was_stale or doc_is_still_accurate) return;
+
+    const stored_doc = binding.fieldValue("doc") orelse return;
+    if (!std.mem.eql(u8, stored_doc, doc_hex)) return;
+
+    printStaleContext(ctx, stderr_w, root_path, cwd_path, doc_path, doc_content, binding.target);
+    stderr_w.print("refused: {s} -> {s} — doc unchanged since target was modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{ doc_path, binding.target }) catch {};
+    return error.DocUnchanged;
+}
+
 fn upsertBinding(
     ctx: CommandContext,
     lf: *lockfile.Lockfile,
@@ -136,8 +142,6 @@ fn upsertBinding(
         .target = try ctx.run_arena.dupe(u8, normalized_target),
         .metadata = .{},
     };
-    errdefer binding.metadata.deinit(ctx.run_arena);
-
     try refreshBindingSig(ctx, cwd_path, lf.root_path, &binding);
     try lf.bindings.append(ctx.run_arena, binding);
 }
@@ -284,13 +288,11 @@ fn printStaleContext(
     // --- doc section ---
     printDocSection(stderr_w, doc_path, doc_content, binding_target, parsed);
 
-    // --- target section (depends on anchor kind) ---
+    // --- target section (symbol or heading anchors only) ---
     if (parsed.isHeading()) {
         printHeadingTarget(ctx, stderr_w, root_path, cwd_path, parsed);
     } else if (parsed.symbol_name != null) {
         printSymbolTarget(ctx, stderr_w, root_path, cwd_path, parsed);
-    } else {
-        printFileTarget(ctx, stderr_w, root_path, cwd_path, parsed);
     }
 
     stderr_w.print("\n", .{}) catch {};
@@ -491,40 +493,13 @@ fn printSymbolTarget(
     printCappedLines(stderr_w, source);
 }
 
-fn printFileTarget(
-    ctx: CommandContext,
-    stderr_w: *std.io.Writer,
-    root_path: []const u8,
-    _: []const u8,
-    parsed: target.ParsedTarget,
-) void {
-    const result = std.process.Child.run(.{
-        .allocator = ctx.scratch(),
-        .argv = &.{ "git", "log", "--oneline", "-5", "--", parsed.file_path },
-        .cwd = root_path,
-        .max_output_bytes = 256 * 1024,
-    }) catch return;
-    defer {
-        ctx.scratch().free(result.stdout);
-        ctx.scratch().free(result.stderr);
-        ctx.resetScratch();
-    }
-
-    const trimmed = std.mem.trimRight(u8, result.stdout, "\n\r ");
-    if (trimmed.len == 0) return;
-
-    stderr_w.print("\n── commits since last link ──\n", .{}) catch {};
-    stderr_w.print("{s}\n", .{trimmed}) catch {};
-}
-
 fn printCappedLines(stderr_w: *std.io.Writer, text: []const u8) void {
-    const total_lines = countLines(text);
     var lines = std.mem.splitScalar(u8, text, '\n');
     var printed: usize = 0;
 
     while (lines.next()) |line| {
         if (printed >= stale_context_line_cap) {
-            stderr_w.print("  ... (showing {d} of {d} lines)\n", .{ stale_context_line_cap, total_lines }) catch {};
+            stderr_w.print("  ... ({d} more lines)\n", .{countLines(lines.rest()) + 1}) catch {};
             return;
         }
         stderr_w.print("{s}\n", .{line}) catch {};
