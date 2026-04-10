@@ -17,3 +17,6 @@ docs/RELEASING.md -> .github/workflows/release.yml sig:f74d66b6bd7f959c
 docs/RELEASING.md -> cliff.toml sig:d2a8e301fe4b788e
 docs/check-json-schema.md -> docs/schemas/drift.check.v1.json sig:4e6d23b9945aebb1
 docs/check-json-schema.md -> src/payload/drift_check_v1.zig sig:d446ad53565b6916
+examples/relink-gate/doc.md -> examples/relink-gate/auth.ts#login sig:c8bbc20bd89e5037 doc:d8a816f1e32c7dcf
+examples/symbol-anchor/doc.md -> examples/symbol-anchor/config.ts#DatabaseConfig sig:a643fafff54d00ed doc:c0e40992f7a92864
+examples/symbol-anchor/doc.md -> examples/symbol-anchor/config.ts#createPool sig:3294e048b6c144ae doc:c0e40992f7a92864
