@@ -19,7 +19,9 @@ pub fn run(
 ) !void {
     const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
 
-    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    const abs_doc_path = try std.fs.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
+    const doc_dir = std.fs.path.dirname(abs_doc_path) orelse cwd_path;
+    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
     const doc_content = std.fs.cwd().readFileAlloc(ctx.run_arena, doc_path, 1024 * 1024) catch |err| {
@@ -52,8 +54,7 @@ pub fn run(
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
         if (isDocGateBlocked(binding, old_sig, doc_is_still_accurate)) {
             printStaleContext(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, binding.target);
-            stderr_w.print("refused: {s} -> {s} — target changed since last link.\nReview the doc, then relink with --doc-is-still-accurate.\n", .{ doc_path, binding.target }) catch {};
-            return error.DocUnchanged;
+            if (!promptDocAccurate(stderr_w)) return error.DocUnchanged;
         }
         binding.removeField("doc");
 
@@ -89,11 +90,28 @@ pub fn run(
 
     if (refused_count > 0) {
         printBlanketRefusal(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, lf.bindings.items, normalized_doc_path, refused_count);
-        return error.DocUnchanged;
+        if (!promptDocAccurate(stderr_w)) return error.DocUnchanged;
     }
 
     try lockfile.writeFile(&lf, ctx.scratch());
     stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
+}
+
+/// In TTY mode, prompt the user to confirm the doc is still accurate.
+/// In non-TTY mode, print the refusal message and return false.
+fn promptDocAccurate(stderr_w: *std.io.Writer) bool {
+    const stdin = std.fs.File.stdin();
+    if (!stdin.isTty()) {
+        stderr_w.print("refused: target changed since last link.\nReview the doc, then relink with --doc-is-still-accurate.\n", .{}) catch {};
+        return false;
+    }
+    stderr_w.print("Doc is still accurate? [y/N] ", .{}) catch {};
+    stderr_w.flush() catch {};
+    var buf: [16]u8 = undefined;
+    const n = stdin.read(&buf) catch return false;
+    if (n == 0) return false;
+    const answer = std.mem.trimRight(u8, buf[0..n], "\r\n \t");
+    return answer.len > 0 and (answer[0] == 'y' or answer[0] == 'Y');
 }
 
 /// Returns true when a relink should be refused: target changed without review.
@@ -144,7 +162,7 @@ fn printBlanketRefusal(
         stderr_w.print("  STALE  {s}\n", .{b.target}) catch {};
     }
 
-    stderr_w.print("\nrefused: {d} anchor{s} in {s} — targets changed since last link.\nReview the doc, then relink with --doc-is-still-accurate.\n", .{
+    stderr_w.print("\n{d} stale anchor{s} in {s}\n", .{
         refused_count,
         if (refused_count == 1) "" else "s",
         doc_path,

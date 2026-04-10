@@ -798,3 +798,46 @@ test "lint --format json works as alias" {
     try helpers.validateDriftCheckJson(allocator, result.stdout);
     try helpers.expectContains(result.stdout, "drift.check.v1");
 }
+
+test "check from root skips docs in nested drift.lock scope" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    // Create root lockfile and a nested lockfile in nested/
+    try repo.writeFile("drift.lock", "");
+    try repo.writeFile("docs/root.md", "# Root\n");
+    try repo.writeFile("nested/drift.lock", "");
+    try repo.writeFile("nested/doc.md", "# Nested\n\nSee [missing](missing.md).\n");
+    try repo.commit("add root and nested scope");
+
+    // From root: should NOT report the broken link in nested/doc.md
+    const result = try repo.runDrift(&.{"check"});
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 0);
+    try helpers.expectNotContains(result.stdout, "nested/doc.md");
+    try helpers.expectNotContains(result.stdout, "BROKEN");
+}
+
+test "check from nested subdir with its own drift.lock only checks that scope" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("drift.lock", "");
+    try repo.writeFile("docs/root.md", "# Root\n\nSee [missing](missing.md).\n");
+    try repo.writeFile("nested/drift.lock", "");
+    try repo.writeFile("nested/doc.md", "# Nested\n\nSee [also-missing](also-missing.md).\n");
+    try repo.commit("add root and nested scope");
+
+    // From nested/: should report the broken link in nested/doc.md
+    const result = try repo.runDriftFromSubdir("nested", &.{"check"});
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stdout, "doc.md");
+    try helpers.expectContains(result.stdout, "BROKEN");
+    // Should NOT contain docs from root scope
+    try helpers.expectNotContains(result.stdout, "docs/root.md");
+}

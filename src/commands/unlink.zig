@@ -8,7 +8,9 @@ pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writ
 
     const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
 
-    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    const abs_doc_path = try std.fs.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
+    const doc_dir = std.fs.path.dirname(abs_doc_path) orelse cwd_path;
+    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
     if (!lf.exists) return;

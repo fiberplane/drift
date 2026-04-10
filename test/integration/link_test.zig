@@ -133,7 +133,7 @@ test "link blanket mode refuses relink when doc unchanged" {
     defer result.deinit(allocator);
     try helpers.expectExitCode(result.term, 1);
     try helpers.expectContains(result.stderr, "refused:");
-    try helpers.expectContains(result.stderr, "targets changed since last link");
+    try helpers.expectContains(result.stderr, "--doc-is-still-accurate");
 }
 
 test "link blanket mode refuses relink even when doc changed" {
@@ -157,7 +157,7 @@ test "link blanket mode refuses relink even when doc changed" {
     defer result.deinit(allocator);
     try helpers.expectExitCode(result.term, 1);
     try helpers.expectContains(result.stderr, "refused:");
-    try helpers.expectContains(result.stderr, "targets changed since last link");
+    try helpers.expectContains(result.stderr, "--doc-is-still-accurate");
 }
 
 test "link blanket mode relinks with --doc-is-still-accurate override" {
@@ -204,4 +204,59 @@ test "link no longer migrates legacy frontmatter anchors" {
 
     try helpers.expectExitCode(result.term, 1);
     try helpers.expectContains(result.stderr, "no bindings found for docs/doc.md");
+}
+
+test "link uses nested drift.lock when doc is in nested scope" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("drift.lock", "");
+    try repo.writeFile("nested/drift.lock", "");
+    try repo.writeFile("nested/doc.md", "# Nested\n");
+    try repo.writeFile("nested/code.ts", "export const value = 1;\n");
+    try repo.commit("add root and nested scope");
+
+    // Run link from root, but doc is in nested/ — should write to nested/drift.lock
+    const result = try repo.runDrift(&.{ "link", "nested/doc.md", "nested/code.ts" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 0);
+    try helpers.expectContains(result.stdout, "added doc.md -> code.ts sig:");
+
+    // Verify binding is in nested/drift.lock, NOT root drift.lock
+    const nested_lock = try repo.readFile("nested/drift.lock");
+    defer allocator.free(nested_lock);
+    try helpers.expectContains(nested_lock, "doc.md -> code.ts sig:");
+
+    const root_lock = try repo.readFile("drift.lock");
+    defer allocator.free(root_lock);
+    try std.testing.expectEqualStrings("", root_lock);
+}
+
+test "unlink uses nested drift.lock when doc is in nested scope" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("drift.lock", "");
+    try repo.writeFile("nested/drift.lock", "nested/doc.md -> nested/code.ts sig:deadbeefdeadbeef\n");
+
+    // Wait, unlink normalizes paths relative to lockfile root.
+    // Since nested/drift.lock root is nested/, the binding path is doc.md -> code.ts
+    try repo.writeFile("nested/drift.lock", "doc.md -> code.ts sig:deadbeefdeadbeef\n");
+    try repo.writeFile("nested/doc.md", "# Nested\n");
+    try repo.writeFile("nested/code.ts", "export const value = 1;\n");
+    try repo.commit("add root and nested scope with binding");
+
+    // Run unlink from root, but doc is in nested/ — should use nested/drift.lock
+    const result = try repo.runDrift(&.{ "unlink", "nested/doc.md", "nested/code.ts" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 0);
+    try helpers.expectContains(result.stdout, "removed doc.md -> code.ts from drift.lock");
+
+    const nested_lock = try repo.readFile("nested/drift.lock");
+    defer allocator.free(nested_lock);
+    try helpers.expectNotContains(nested_lock, "code.ts");
 }

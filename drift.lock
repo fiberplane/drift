@@ -1,15 +1,15 @@
-.claude/skills/drift/SKILL.md -> src/main.zig sig:293b2dd6f549640e origin:github:fiberplane/drift
+.claude/skills/drift/SKILL.md -> src/main.zig sig:647a31274655a84d origin:github:fiberplane/drift
 .claude/skills/drift/SKILL.md -> src/vcs.zig sig:2468937f00d5305a origin:github:fiberplane/drift
 CLAUDE.md -> build.zig sig:7194b38f39dbadba
-CLAUDE.md -> src/main.zig sig:293b2dd6f549640e
-docs/CLI.md -> src/commands/link.zig sig:152208e2069486aa
-docs/CLI.md -> src/commands/lint.zig sig:a0237cda56055884
+CLAUDE.md -> src/main.zig sig:647a31274655a84d
+docs/CLI.md -> src/commands/link.zig sig:70e52c01fb9022a8
+docs/CLI.md -> src/commands/lint.zig sig:b8ab0cd93909b888
 docs/CLI.md -> src/commands/refs.zig sig:e3309a0d11c02bb0
 docs/CLI.md -> src/commands/status.zig sig:ab9cee37b4b22644
-docs/CLI.md -> src/commands/unlink.zig sig:590c53a3920551d3
+docs/CLI.md -> src/commands/unlink.zig sig:6fc59e2a25f80fac
 docs/DESIGN.md -> src/context.zig sig:70678dcc0872470d
-docs/DESIGN.md -> src/lockfile.zig sig:f659df3e59325b71
-docs/DESIGN.md -> src/main.zig sig:293b2dd6f549640e
+docs/DESIGN.md -> src/lockfile.zig sig:23bc7256cff13942
+docs/DESIGN.md -> src/main.zig sig:647a31274655a84d
 docs/DESIGN.md -> src/symbols.zig sig:8e4a403c6f0130c3
 docs/DESIGN.md -> src/vcs.zig sig:2468937f00d5305a
 docs/RELEASING.md -> .github/workflows/ci.yml sig:e8440b1d7ee3e4ba
@@ -17,6 +17,3 @@ docs/RELEASING.md -> .github/workflows/release.yml sig:f74d66b6bd7f959c
 docs/RELEASING.md -> cliff.toml sig:d2a8e301fe4b788e
 docs/check-json-schema.md -> docs/schemas/drift.check.v1.json sig:4e6d23b9945aebb1
 docs/check-json-schema.md -> src/payload/drift_check_v1.zig sig:d446ad53565b6916
-examples/relink-gate/doc.md -> examples/relink-gate/auth.ts#login sig:c8bbc20bd89e5037 doc:d8a816f1e32c7dcf
-examples/symbol-anchor/doc.md -> examples/symbol-anchor/config.ts#DatabaseConfig sig:a643fafff54d00ed doc:c0e40992f7a92864
-examples/symbol-anchor/doc.md -> examples/symbol-anchor/config.ts#createPool sig:3294e048b6c144ae doc:c0e40992f7a92864

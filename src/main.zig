@@ -51,6 +51,7 @@ const format_params = clap.parseParamsComptime(
 const check_params = clap.parseParamsComptime(
     \\--format <str>
     \\--changed <str>
+    \\--silent
     \\
 );
 
@@ -160,15 +161,22 @@ pub fn main() !void {
             var sub = parseExOrReport(&check_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
-                fatal(&stderr_w.interface, "usage: drift check [--format text|json] [--changed <path>]\n", .{});
+                fatal(&stderr_w.interface, "usage: drift check [--format text|json] [--changed <path>] [--silent]\n", .{});
             }
             const format = parseFormat(sub.args.format, &stderr_w.interface);
+            const silent = sub.args.silent != 0;
+            var null_buf: [1]u8 = undefined;
+            var null_file = std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only }) catch
+                fatal(&stderr_w.interface, "error: cannot open /dev/null\n", .{});
+            defer null_file.close();
+            var null_w = null_file.writer(&null_buf);
             var run_arena = std.heap.ArenaAllocator.init(allocator);
             defer run_arena.deinit();
             var scratch_arena = std.heap.ArenaAllocator.init(allocator);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            const run_status = lint.run(ctx, &stdout_w.interface, &stderr_w.interface, format, sub.args.changed) catch |err| switch (err) {
+            const out_w = if (silent) &null_w.interface else &stdout_w.interface;
+            const run_status = lint.run(ctx, out_w, &stderr_w.interface, format, sub.args.changed) catch |err| switch (err) {
                 error.LintCheckFailed => {
                     stdout_w.interface.flush() catch {};
                     stderr_w.interface.flush() catch {};
@@ -292,7 +300,7 @@ fn printUsage(w: *std.io.Writer) void {
         \\Usage: drift <command> [options]
         \\
         \\Commands:
-        \\  check     Check all docs for staleness  [--format text|json] [--changed <path>]
+        \\  check     Check all docs for staleness  [--format text|json] [--changed <path>] [--silent]
         \\  status    Show all docs and their anchors  [--format text|json]
         \\  link      Add anchors to a doc  [--doc-is-still-accurate]
         \\  unlink    Remove anchors from a doc
