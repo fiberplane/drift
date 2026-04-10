@@ -7,11 +7,11 @@ docs/CLI.md -> src/commands/lint.zig sig:a0237cda56055884
 docs/CLI.md -> src/commands/refs.zig sig:e3309a0d11c02bb0
 docs/CLI.md -> src/commands/status.zig sig:ab9cee37b4b22644
 docs/CLI.md -> src/commands/unlink.zig sig:590c53a3920551d3
-docs/DESIGN.md -> src/context.zig sig:70678dcc0872470d
-docs/DESIGN.md -> src/lockfile.zig sig:f659df3e59325b71
-docs/DESIGN.md -> src/main.zig sig:a0933989333423fb
-docs/DESIGN.md -> src/symbols.zig sig:8e4a403c6f0130c3
-docs/DESIGN.md -> src/vcs.zig sig:2468937f00d5305a
+docs/DESIGN.md -> src/context.zig sig:70678dcc0872470d doc:8a5ec5123fb76d48
+docs/DESIGN.md -> src/lockfile.zig sig:f659df3e59325b71 doc:8a5ec5123fb76d48
+docs/DESIGN.md -> src/main.zig sig:293b2dd6f549640e doc:8a5ec5123fb76d48
+docs/DESIGN.md -> src/symbols.zig sig:8e4a403c6f0130c3 doc:8a5ec5123fb76d48
+docs/DESIGN.md -> src/vcs.zig sig:2468937f00d5305a doc:8a5ec5123fb76d48
 docs/RELEASING.md -> .github/workflows/ci.yml sig:e8440b1d7ee3e4ba
 docs/RELEASING.md -> .github/workflows/release.yml sig:f74d66b6bd7f959c
 docs/RELEASING.md -> cliff.toml sig:d2a8e301fe4b788e

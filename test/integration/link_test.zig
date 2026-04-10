@@ -132,7 +132,7 @@ test "link blanket mode refuses relink when doc unchanged" {
     defer result.deinit(allocator);
     try helpers.expectExitCode(result.term, 1);
     try helpers.expectContains(result.stderr, "refused:");
-    try helpers.expectContains(result.stderr, "doc unchanged since target was modified");
+    try helpers.expectContains(result.stderr, "doc unchanged since targets were modified");
 }
 
 test "link blanket mode relinks when doc changed" {

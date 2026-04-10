@@ -5,7 +5,7 @@ const markdown = @import("../markdown.zig");
 const symbols = @import("../symbols.zig");
 const target = @import("../target.zig");
 
-const stale_context_line_cap = 30;
+const stale_context_line_cap = 10;
 
 pub const RunError = error{ DocReadFailed, NoBindingsForDoc, CannotComputeFingerprint, TargetNotFound, HeadingNotFound, DocUnchanged };
 
@@ -53,7 +53,11 @@ pub fn run(
         try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target);
 
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
-        try checkDocGate(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, &doc_hex, binding, old_sig, doc_is_still_accurate);
+        if (isDocGateBlocked(binding, old_sig, &doc_hex, doc_is_still_accurate)) {
+            printStaleContext(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, binding.target);
+            stderr_w.print("refused: {s} -> {s} — doc unchanged since target was modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{ doc_path, binding.target }) catch {};
+            return error.DocUnchanged;
+        }
         try binding.setField(ctx.run_arena, "doc", &doc_hex);
 
         try lockfile.writeFile(&lf, ctx.scratch());
@@ -67,17 +71,15 @@ pub fn run(
     }
 
     var relinked_any = false;
-    var stale_and_unchanged = false;
+    var refused_count: usize = 0;
     for (lf.bindings.items) |*binding| {
         if (!std.mem.eql(u8, binding.doc_path, normalized_doc_path)) continue;
         const old_sig = binding.fieldValue("sig");
         try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
 
-        checkDocGate(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, &doc_hex, binding, old_sig, doc_is_still_accurate) catch {
-            stale_and_unchanged = true;
-        };
-
-        if (!stale_and_unchanged) {
+        if (isDocGateBlocked(binding, old_sig, &doc_hex, doc_is_still_accurate)) {
+            refused_count += 1;
+        } else {
             try binding.setField(ctx.run_arena, "doc", &doc_hex);
         }
         relinked_any = true;
@@ -88,7 +90,8 @@ pub fn run(
         return error.NoBindingsForDoc;
     }
 
-    if (stale_and_unchanged) {
+    if (refused_count > 0) {
+        printBlanketRefusal(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, &doc_hex, lf.bindings.items, normalized_doc_path, refused_count);
         return error.DocUnchanged;
     }
 
@@ -96,9 +99,27 @@ pub fn run(
     stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
 }
 
-/// Check whether a relink should be refused because the target changed but
-/// the doc didn't. Returns `error.DocUnchanged` when the gate triggers.
-fn checkDocGate(
+/// Returns true when a relink should be refused: target changed but doc didn't.
+fn isDocGateBlocked(
+    binding: *lockfile.Binding,
+    old_sig: ?[]const u8,
+    doc_hex: *const [16]u8,
+    doc_is_still_accurate: bool,
+) bool {
+    if (doc_is_still_accurate) return false;
+    const was_stale = blk: {
+        const os = old_sig orelse break :blk false;
+        const ns = binding.fieldValue("sig") orelse break :blk true;
+        break :blk !std.mem.eql(u8, os, ns);
+    };
+    if (!was_stale) return false;
+    const stored_doc = binding.fieldValue("doc") orelse return false;
+    return std.mem.eql(u8, stored_doc, doc_hex);
+}
+
+/// Print a consolidated refusal for blanket relink: doc section once, then
+/// each refused binding with its target context.
+fn printBlanketRefusal(
     ctx: CommandContext,
     stderr_w: *std.io.Writer,
     root_path: []const u8,
@@ -106,23 +127,42 @@ fn checkDocGate(
     doc_path: []const u8,
     doc_content: []const u8,
     doc_hex: *const [16]u8,
-    binding: *lockfile.Binding,
-    old_sig: ?[]const u8,
-    doc_is_still_accurate: bool,
-) !void {
-    const was_stale = blk: {
-        const os = old_sig orelse break :blk false;
-        const ns = binding.fieldValue("sig") orelse break :blk true;
-        break :blk !std.mem.eql(u8, os, ns);
+    bindings: []lockfile.Binding,
+    normalized_doc_path: []const u8,
+    refused_count: usize,
+) void {
+    // Print the doc section once
+    const parsed_first = blk: {
+        for (bindings) |*b| {
+            if (!std.mem.eql(u8, b.doc_path, normalized_doc_path)) continue;
+            const stored_doc = b.fieldValue("doc") orelse continue;
+            if (std.mem.eql(u8, stored_doc, doc_hex)) break :blk target.parse(b.target);
+        }
+        return;
     };
-    if (!was_stale or doc_is_still_accurate) return;
+    printDocSection(stderr_w, doc_path, doc_content, parsed_first.identity, parsed_first);
 
-    const stored_doc = binding.fieldValue("doc") orelse return;
-    if (!std.mem.eql(u8, stored_doc, doc_hex)) return;
+    // Print each refused binding's target context (code/heading only, no repeated doc)
+    for (bindings) |*b| {
+        if (!std.mem.eql(u8, b.doc_path, normalized_doc_path)) continue;
+        const stored_doc = b.fieldValue("doc") orelse continue;
+        if (!std.mem.eql(u8, stored_doc, doc_hex)) continue;
 
-    printStaleContext(ctx, stderr_w, root_path, cwd_path, doc_path, doc_content, binding.target);
-    stderr_w.print("refused: {s} -> {s} — doc unchanged since target was modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{ doc_path, binding.target }) catch {};
-    return error.DocUnchanged;
+        const parsed = target.parse(b.target);
+        if (parsed.isHeading()) {
+            printHeadingTarget(ctx, stderr_w, root_path, cwd_path, parsed);
+        } else if (parsed.symbol_name != null) {
+            printSymbolTarget(ctx, stderr_w, root_path, cwd_path, parsed);
+        }
+
+        stderr_w.print("  STALE  {s}\n", .{b.target}) catch {};
+    }
+
+    stderr_w.print("\nrefused: {d} anchor{s} in {s} — doc unchanged since targets were modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{
+        refused_count,
+        if (refused_count == 1) "" else "s",
+        doc_path,
+    }) catch {};
 }
 
 fn upsertBinding(
