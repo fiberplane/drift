@@ -99,7 +99,7 @@ relinked all anchors in docs/auth.md
 
 Each anchor gets its own content signature computed from the current file on disk.
 
-**Relink gate** — `drift link` also stores a `doc:<hex>` hash of the doc's content. When relinking a stale anchor (target signature changed), it compares the current doc hash to the stored one. If the doc hasn't changed, the relink is refused and both sides are printed (doc section and current code). This prevents blindly restamping without updating documentation. The `--doc-is-still-accurate` flag overrides the gate when the doc genuinely doesn't need changes.
+**Relink gate** — when relinking a stale anchor (target signature changed), the relink is refused and both sides are printed (doc section and current code). This prevents blindly restamping without reviewing documentation. Pass `--doc-is-still-accurate` to confirm you've reviewed the doc and it doesn't need changes.
 
 ## drift unlink
 

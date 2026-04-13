@@ -30,9 +30,6 @@ pub fn run(
     const normalized_doc_path = try normalizeDocPath(ctx, lf.root_path, cwd_path, doc_path);
     ctx.resetScratch();
 
-    var doc_hex: [16]u8 = undefined;
-    _ = std.fmt.bufPrint(&doc_hex, "{x:0>16}", .{computeDocHash(doc_content)}) catch unreachable;
-
     if (optional_anchor) |raw_anchor| {
         const normalized_target = normalizeTargetPath(ctx, lf.root_path, cwd_path, raw_anchor) catch |err| switch (err) {
             error.TargetNotFound => {
@@ -53,12 +50,12 @@ pub fn run(
         try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target);
 
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
-        if (isDocGateBlocked(binding, old_sig, &doc_hex, doc_is_still_accurate)) {
+        if (isDocGateBlocked(binding, old_sig, doc_is_still_accurate)) {
             printStaleContext(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, binding.target);
-            stderr_w.print("refused: {s} -> {s} — doc unchanged since target was modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{ doc_path, binding.target }) catch {};
+            stderr_w.print("refused: {s} -> {s} — target changed since last link.\nReview the doc, then relink with --doc-is-still-accurate.\n", .{ doc_path, binding.target }) catch {};
             return error.DocUnchanged;
         }
-        try binding.setField(ctx.run_arena, "doc", &doc_hex);
+        binding.removeField("doc");
 
         try lockfile.writeFile(&lf, ctx.scratch());
 
@@ -77,10 +74,10 @@ pub fn run(
         const old_sig = binding.fieldValue("sig");
         try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
 
-        if (isDocGateBlocked(binding, old_sig, &doc_hex, doc_is_still_accurate)) {
+        if (isDocGateBlocked(binding, old_sig, doc_is_still_accurate)) {
             refused_count += 1;
         } else {
-            try binding.setField(ctx.run_arena, "doc", &doc_hex);
+            binding.removeField("doc");
         }
         relinked_any = true;
     }
@@ -91,7 +88,7 @@ pub fn run(
     }
 
     if (refused_count > 0) {
-        printBlanketRefusal(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, &doc_hex, lf.bindings.items, normalized_doc_path, refused_count);
+        printBlanketRefusal(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, lf.bindings.items, normalized_doc_path, refused_count);
         return error.DocUnchanged;
     }
 
@@ -99,22 +96,16 @@ pub fn run(
     stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
 }
 
-/// Returns true when a relink should be refused: target changed but doc didn't.
+/// Returns true when a relink should be refused: target changed without review.
 fn isDocGateBlocked(
     binding: *lockfile.Binding,
     old_sig: ?[]const u8,
-    doc_hex: *const [16]u8,
     doc_is_still_accurate: bool,
 ) bool {
     if (doc_is_still_accurate) return false;
-    const was_stale = blk: {
-        const os = old_sig orelse break :blk false;
-        const ns = binding.fieldValue("sig") orelse break :blk true;
-        break :blk !std.mem.eql(u8, os, ns);
-    };
-    if (!was_stale) return false;
-    const stored_doc = binding.fieldValue("doc") orelse return false;
-    return std.mem.eql(u8, stored_doc, doc_hex);
+    const os = old_sig orelse return false;
+    const ns = binding.fieldValue("sig") orelse return true;
+    return !std.mem.eql(u8, os, ns);
 }
 
 /// Print a consolidated refusal for blanket relink: doc section once, then
@@ -126,27 +117,22 @@ fn printBlanketRefusal(
     cwd_path: []const u8,
     doc_path: []const u8,
     doc_content: []const u8,
-    doc_hex: *const [16]u8,
     bindings: []lockfile.Binding,
     normalized_doc_path: []const u8,
     refused_count: usize,
 ) void {
-    // Print the doc section once
+    // Print the doc section once using the first binding for this doc
     const parsed_first = blk: {
         for (bindings) |*b| {
-            if (!std.mem.eql(u8, b.doc_path, normalized_doc_path)) continue;
-            const stored_doc = b.fieldValue("doc") orelse continue;
-            if (std.mem.eql(u8, stored_doc, doc_hex)) break :blk target.parse(b.target);
+            if (std.mem.eql(u8, b.doc_path, normalized_doc_path)) break :blk target.parse(b.target);
         }
         return;
     };
     printDocSection(stderr_w, doc_path, doc_content, parsed_first.identity, parsed_first);
 
-    // Print each refused binding's target context (code/heading only, no repeated doc)
+    // Print each binding's target context
     for (bindings) |*b| {
         if (!std.mem.eql(u8, b.doc_path, normalized_doc_path)) continue;
-        const stored_doc = b.fieldValue("doc") orelse continue;
-        if (!std.mem.eql(u8, stored_doc, doc_hex)) continue;
 
         const parsed = target.parse(b.target);
         if (parsed.isHeading()) {
@@ -158,7 +144,7 @@ fn printBlanketRefusal(
         stderr_w.print("  STALE  {s}\n", .{b.target}) catch {};
     }
 
-    stderr_w.print("\nrefused: {d} anchor{s} in {s} — doc unchanged since targets were modified.\nUpdate the doc, then relink. Use --doc-is-still-accurate to override.\n", .{
+    stderr_w.print("\nrefused: {d} anchor{s} in {s} — targets changed since last link.\nReview the doc, then relink with --doc-is-still-accurate.\n", .{
         refused_count,
         if (refused_count == 1) "" else "s",
         doc_path,
@@ -195,12 +181,6 @@ fn refreshBindingSig(
     var hex: [16]u8 = undefined;
     try computeTargetSigInto(ctx, cwd_path, root_path, binding.target, &hex);
     try binding.setField(ctx.run_arena, "sig", hex[0..16]);
-}
-
-fn computeDocHash(content: []const u8) u64 {
-    var hasher = std.hash.XxHash3.init(0);
-    hasher.update(content);
-    return hasher.final();
 }
 
 fn computeTargetSigInto(

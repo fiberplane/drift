@@ -17,6 +17,18 @@ pub const Binding = struct {
         return null;
     }
 
+    /// Removes a metadata field by key, if present.
+    pub fn removeField(self: *Binding, key: []const u8) void {
+        var i: usize = 0;
+        while (i < self.metadata.items.len) {
+            if (std.mem.eql(u8, self.metadata.items[i].key, key)) {
+                _ = self.metadata.orderedRemove(i);
+                return;
+            }
+            i += 1;
+        }
+    }
+
     /// Updates or appends a metadata field. On replace, frees the old value with `allocator` before allocating the new slice.
     pub fn setField(self: *Binding, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
         for (self.metadata.items) |*field| {

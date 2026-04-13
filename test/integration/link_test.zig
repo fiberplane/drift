@@ -31,6 +31,7 @@ test "link adds new file binding to drift.lock" {
     const lock_content = try repo.readFile("drift.lock");
     defer allocator.free(lock_content);
     try helpers.expectContains(lock_content, "docs/doc.md -> src/new.ts sig:");
+    try helpers.expectNotContains(lock_content, "doc:");
 
     const doc_content = try repo.readFile("docs/doc.md");
     defer allocator.free(doc_content);
@@ -132,10 +133,10 @@ test "link blanket mode refuses relink when doc unchanged" {
     defer result.deinit(allocator);
     try helpers.expectExitCode(result.term, 1);
     try helpers.expectContains(result.stderr, "refused:");
-    try helpers.expectContains(result.stderr, "doc unchanged since targets were modified");
+    try helpers.expectContains(result.stderr, "targets changed since last link");
 }
 
-test "link blanket mode relinks when doc changed" {
+test "link blanket mode refuses relink even when doc changed" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);
     defer repo.cleanup();
@@ -149,21 +150,14 @@ test "link blanket mode relinks when doc changed" {
     try helpers.expectExitCode(first_link.term, 0);
     try repo.commit("create lockfile binding");
 
-    const before = try repo.readFile("drift.lock");
-    defer allocator.free(before);
-
     try repo.writeFile("src/main.ts", "export const value = 2;\n");
     try repo.writeFile("docs/doc.md", "# Doc\nUpdated content.\n");
 
     const result = try repo.runDrift(&.{ "link", "docs/doc.md" });
     defer result.deinit(allocator);
-    try helpers.expectExitCode(result.term, 0);
-    try helpers.expectContains(result.stdout, "relinked all anchors in docs/doc.md");
-
-    const after = try repo.readFile("drift.lock");
-    defer allocator.free(after);
-    try std.testing.expect(!std.mem.eql(u8, before, after));
-    try helpers.expectContains(after, "docs/doc.md -> src/main.ts sig:");
+    try helpers.expectExitCode(result.term, 1);
+    try helpers.expectContains(result.stderr, "refused:");
+    try helpers.expectContains(result.stderr, "targets changed since last link");
 }
 
 test "link blanket mode relinks with --doc-is-still-accurate override" {
