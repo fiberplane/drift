@@ -429,8 +429,11 @@ fn classifyRelativeLink(
     const path_part = if (std.mem.indexOfScalar(u8, trimmed, '#')) |idx| trimmed[0..idx] else trimmed;
     if (path_part.len == 0) return null;
 
-    const doc_dir = std.fs.path.dirname(doc_path) orelse ".";
-    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ root_path, doc_dir, path_part });
+    // Resolve symlinks on the doc path so relative links are computed from the real location.
+    const raw_absolute_doc = try std.fs.path.resolve(ctx.scratch(), &.{ root_path, doc_path });
+    const real_doc_path = std.fs.cwd().realpathAlloc(ctx.scratch(), raw_absolute_doc) catch raw_absolute_doc;
+    const doc_dir = std.fs.path.dirname(real_doc_path) orelse root_path;
+    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ doc_dir, path_part });
     const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
     const exists = pathExists(absolute);
     ctx.resetScratch();
