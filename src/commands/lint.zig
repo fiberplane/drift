@@ -317,6 +317,7 @@ fn discoverDocGroups(
         offset += rel_end + 1;
 
         if (!std.mem.endsWith(u8, line, ".md")) continue;
+        if (hasNestedLockfile(root_path, line, allocator)) continue;
         _ = try ensureDocGroup(allocator, &docs, line);
     }
 
@@ -340,6 +341,19 @@ fn discoverDocGroups(
     }
 
     return docs;
+}
+
+/// Check if a relative path has a closer drift.lock than root_path.
+/// Returns true if there's an intermediate drift.lock (the file belongs to a nested scope).
+fn hasNestedLockfile(root_path: []const u8, rel_path: []const u8, allocator: std.mem.Allocator) bool {
+    var dir: []const u8 = std.fs.path.dirname(rel_path) orelse return false;
+
+    while (dir.len > 0) {
+        const candidate = std.fs.path.join(allocator, &.{ root_path, dir, "drift.lock" }) catch return false;
+        if (pathExists(candidate)) return true;
+        dir = std.fs.path.dirname(dir) orelse break;
+    }
+    return false;
 }
 
 fn ensureDocGroup(

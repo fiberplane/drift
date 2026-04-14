@@ -4,7 +4,7 @@
 
 ## drift check / drift lint
 
-Check all docs for staleness. The primary command. Exits 1 if any anchor is stale or any link is broken. `drift lint` is an alias.
+Check all docs for staleness. The primary command. Exits 1 if any anchor is stale or any link is broken. `drift lint` is an alias. Markdown files under directories with their own `drift.lock` are skipped — they belong to a nested scope.
 
 ```
 drift check [--format text|json] [--changed <path>]
@@ -69,7 +69,7 @@ docs/payments.md (1 anchor)
 
 ## drift link
 
-Add or refresh bindings in `drift.lock`. `drift link` computes a content signature (`sig:`) from the target file's current syntax fingerprint and writes it to the lockfile. Creates `drift.lock` if it doesn't exist.
+Add or refresh bindings in `drift.lock`. `drift link` computes a content signature (`sig:`) from the target file's current syntax fingerprint and writes it to the lockfile. Creates `drift.lock` if it doesn't exist. The lockfile is discovered by walking up from the doc's directory, not from cwd — if a nested `drift.lock` exists closer to the doc, that lockfile is used.
 
 ```
 drift link <doc-path> <file> [--doc-is-still-accurate]
@@ -103,7 +103,7 @@ Each anchor gets its own content signature computed from the current file on dis
 
 ## drift unlink
 
-Remove a binding from `drift.lock`.
+Remove a binding from `drift.lock`. Like `drift link`, the lockfile is discovered from the doc's directory.
 
 ```
 drift unlink <doc-path> <file>

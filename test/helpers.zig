@@ -116,6 +116,23 @@ pub const TempRepo = struct {
         return runProcess(self.allocator, argv, self.abs_path);
     }
 
+    /// Run the drift binary with given arguments, cwd set to a subdirectory of the temp repo.
+    pub fn runDriftFromSubdir(self: *TempRepo, subdir: []const u8, args: []const []const u8) !ExecResult {
+        const drift_bin = build_options.drift_bin;
+
+        var argv_buf: [17][]const u8 = undefined;
+        argv_buf[0] = drift_bin;
+        for (args, 0..) |arg, i| {
+            argv_buf[i + 1] = arg;
+        }
+        const argv = argv_buf[0 .. args.len + 1];
+
+        const sub_path = try std.fs.path.join(self.allocator, &.{ self.abs_path, subdir });
+        defer self.allocator.free(sub_path);
+
+        return runProcess(self.allocator, argv, sub_path);
+    }
+
     /// Get the short commit hash of HEAD. Caller owns returned memory.
     pub fn getHeadRevision(self: *TempRepo, allocator: std.mem.Allocator) ![]const u8 {
         const result = try runProcess(allocator, &.{ "git", "rev-parse", "--short", "HEAD" }, self.abs_path);
