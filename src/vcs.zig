@@ -408,7 +408,7 @@ pub const GitCatFile = struct {
             return null;
         }
 
-        const last_space = std.mem.lastIndexOfScalar(u8, header, ' ') orelse return null;
+        const last_space = std.mem.findScalarLast(u8, header, ' ') orelse return null;
         const size = std.fmt.parseInt(usize, header[last_space + 1 ..], 10) catch return null;
 
         const content = try allocator.alloc(u8, size);

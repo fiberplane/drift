@@ -61,7 +61,7 @@ pub const TempRepo = struct {
 
     /// Write a file at the given relative path, creating parent directories as needed.
     pub fn writeFile(self: *TempRepo, path: []const u8, content: []const u8) !void {
-        if (std.fs.path.dirname(path)) |parent| {
+        if (std.Io.Dir.path.dirname(path)) |parent| {
             try self.tmp.dir.createDirPath(self.io, parent);
         }
         try self.tmp.dir.writeFile(self.io, .{
@@ -130,7 +130,7 @@ pub const TempRepo = struct {
         }
         const argv = argv_buf[0 .. args.len + 1];
 
-        const sub_path = try std.fs.path.join(self.allocator, &.{ self.abs_path, subdir });
+        const sub_path = try std.Io.Dir.path.join(self.allocator, &.{ self.abs_path, subdir });
         defer self.allocator.free(sub_path);
 
         return runProcess(self.allocator, self.io, argv, sub_path);
@@ -197,7 +197,7 @@ pub fn expectExitCode(term: std.process.Child.Term, expected: u8) !void {
 
 /// Assert that `haystack` contains `needle`.
 pub fn expectContains(haystack: []const u8, needle: []const u8) !void {
-    if (std.mem.indexOf(u8, haystack, needle) == null) {
+    if (std.mem.find(u8, haystack, needle) == null) {
         std.debug.print("\n--- Expected to find ---\n{s}\n--- in output ---\n{s}\n--- end ---\n", .{ needle, haystack });
         return error.TestUnexpectedResult;
     }
@@ -205,7 +205,7 @@ pub fn expectContains(haystack: []const u8, needle: []const u8) !void {
 
 /// Assert that `haystack` does NOT contain `needle`.
 pub fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
-    if (std.mem.indexOf(u8, haystack, needle) != null) {
+    if (std.mem.find(u8, haystack, needle) != null) {
         std.debug.print("\n--- Expected NOT to find ---\n{s}\n--- in output ---\n{s}\n--- end ---\n", .{ needle, haystack });
         return error.TestUnexpectedResult;
     }

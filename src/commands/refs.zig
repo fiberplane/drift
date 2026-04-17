@@ -38,7 +38,7 @@ fn normalizeTargetPath(
     const symbol_name = parsed.symbol_name;
 
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
-    const relative = try std.fs.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
 
     if (symbol_name) |symbol| {
@@ -53,14 +53,14 @@ fn resolveInputPath(
     cwd_path: []const u8,
     path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try ctx.scratch().dupe(u8, path);
     }
 
-    const cwd_candidate = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, path });
+    const cwd_candidate = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, path });
     if (pathExists(ctx.io, cwd_candidate)) return cwd_candidate;
 
-    return try std.fs.path.resolve(ctx.scratch(), &.{ root_path, path });
+    return try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, path });
 }
 
 fn pathExists(io: std.Io, path: []const u8) bool {

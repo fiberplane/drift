@@ -19,8 +19,8 @@ pub fn run(
 ) !void {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    const abs_doc_path = try std.fs.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
-    const doc_dir = std.fs.path.dirname(abs_doc_path) orelse cwd_path;
+    const abs_doc_path = try std.Io.Dir.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
+    const doc_dir = std.Io.Dir.path.dirname(abs_doc_path) orelse cwd_path;
     var lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
@@ -226,7 +226,7 @@ fn normalizeDocPath(
     doc_path: []const u8,
 ) ![]const u8 {
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.fs.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
     return relative;
 }
@@ -244,7 +244,7 @@ fn normalizeTargetPath(
         return error.TargetNotFound;
     }
 
-    const relative = try std.fs.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
 
     if (parsed.symbol_name) |symbol| {
         if (parsed.isHeading()) {
@@ -274,14 +274,14 @@ fn resolveInputPath(
     cwd_path: []const u8,
     path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try ctx.scratch().dupe(u8, path);
     }
 
-    const cwd_candidate = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, path });
+    const cwd_candidate = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, path });
     if (pathExists(ctx.io, cwd_candidate)) return cwd_candidate;
 
-    return try std.fs.path.resolve(ctx.scratch(), &.{ root_path, path });
+    return try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, path });
 }
 
 fn pathExists(io: std.Io, path: []const u8) bool {
@@ -290,7 +290,7 @@ fn pathExists(io: std.Io, path: []const u8) bool {
 }
 
 fn readResolvedFile(ctx: CommandContext, path: []const u8) ![]const u8 {
-    const file = if (std.fs.path.isAbsolute(path))
+    const file = if (std.Io.Dir.path.isAbsolute(path))
         try std.Io.Dir.openFileAbsolute(ctx.io, path, .{})
     else
         try std.Io.Dir.cwd().openFile(ctx.io, path, .{});
@@ -377,7 +377,7 @@ fn findDocSectionForTarget(
 
     while (lines.next()) |line| {
         for (search_terms) |term| {
-            if (term.len > 0 and std.mem.indexOf(u8, line, term) != null) {
+            if (term.len > 0 and std.mem.find(u8, line, term) != null) {
                 match_offset = line_start;
                 break;
             }
@@ -479,7 +479,7 @@ fn findNearestHeadingAbove(doc_content: []const u8, section_text: []const u8) ?[
     }
 
     // Also check if section_text itself starts with a heading
-    const first_line_end = std.mem.indexOfScalar(u8, section_text, '\n') orelse section_text.len;
+    const first_line_end = std.mem.findScalar(u8, section_text, '\n') orelse section_text.len;
     const first_line = std.mem.trimStart(u8, section_text[0..first_line_end], " \t");
     if (first_line.len > 0 and first_line[0] == '#') {
         const hashes = countLeadingChar(first_line, '#');
@@ -523,7 +523,7 @@ fn printSymbolTarget(
     defer ctx.resetScratch();
 
     const symbol = parsed.symbol_name orelse return;
-    const ext = std.fs.path.extension(parsed.file_path);
+    const ext = std.Io.Dir.path.extension(parsed.file_path);
     const lang_query = symbols.languageForExtension(ext) orelse return;
     const range = symbols.extractSymbolContent(content, lang_query, symbol) orelse return;
     const source = content[range[0]..range[1]];

@@ -64,7 +64,7 @@ pub const ParseError = error{
 
 /// `run` holds durable lockfile state; `scratch` holds walk temporaries and the lockfile file buffer (reset by caller).
 pub fn discover(io: std.Io, run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: []const u8) !Lockfile {
-    const resolved_run = if (std.fs.path.isAbsolute(start_path))
+    const resolved_run = if (std.Io.Dir.path.isAbsolute(start_path))
         try run.dupe(u8, start_path)
     else
         try std.Io.Dir.cwd().realPathFileAlloc(io, start_path, run);
@@ -73,19 +73,19 @@ pub fn discover(io: std.Io, run: std.mem.Allocator, scratch: std.mem.Allocator, 
     var current = try scratch.dupe(u8, resolved_run);
 
     while (true) {
-        const candidate = try std.fs.path.join(scratch, &.{ current, "drift.lock" });
+        const candidate = try std.Io.Dir.path.join(scratch, &.{ current, "drift.lock" });
 
         if (fileExists(io, candidate)) {
             return try readAtPath(io, run, scratch, current, candidate, true);
         }
 
         // Stop at VCS root — don't climb out of the current repository.
-        const has_git = fileExists(io, try std.fs.path.join(scratch, &.{ current, ".git" }));
-        const has_jj = fileExists(io, try std.fs.path.join(scratch, &.{ current, ".jj" }));
+        const has_git = fileExists(io, try std.Io.Dir.path.join(scratch, &.{ current, ".git" }));
+        const has_jj = fileExists(io, try std.Io.Dir.path.join(scratch, &.{ current, ".jj" }));
         if (has_git or has_jj) {
             return .{
                 .root_path = try run.dupe(u8, current),
-                .lockfile_path = try std.fs.path.join(run, &.{ current, "drift.lock" }),
+                .lockfile_path = try std.Io.Dir.path.join(run, &.{ current, "drift.lock" }),
                 .exists = false,
                 .bindings = .empty,
             };
@@ -94,7 +94,7 @@ pub fn discover(io: std.Io, run: std.mem.Allocator, scratch: std.mem.Allocator, 
         const parent = parentPath(current) orelse {
             return .{
                 .root_path = try run.dupe(u8, resolved_run),
-                .lockfile_path = try std.fs.path.join(run, &.{ resolved_run, "drift.lock" }),
+                .lockfile_path = try std.Io.Dir.path.join(run, &.{ resolved_run, "drift.lock" }),
                 .exists = false,
                 .bindings = .empty,
             };
@@ -238,7 +238,7 @@ pub fn writeFile(io: std.Io, lockfile: *const Lockfile, scratch: std.mem.Allocat
 }
 
 fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
-    const arrow = std.mem.indexOf(u8, line, " -> ") orelse return error.InvalidBindingLine;
+    const arrow = std.mem.find(u8, line, " -> ") orelse return error.InvalidBindingLine;
     const doc_path = std.mem.trim(u8, line[0..arrow], " \t");
     const rest = std.mem.trim(u8, line[arrow + " -> ".len ..], " \t");
     if (doc_path.len == 0 or rest.len == 0) return error.InvalidBindingLine;
@@ -250,7 +250,7 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
     errdefer metadata.deinit(allocator);
 
     while (tokens.next()) |token| {
-        const colon = std.mem.indexOfScalar(u8, token, ':') orelse return error.InvalidMetadataField;
+        const colon = std.mem.findScalar(u8, token, ':') orelse return error.InvalidMetadataField;
         if (colon == 0 or colon == token.len - 1) return error.InvalidMetadataField;
         try metadata.append(allocator, .{
             .key = try allocator.dupe(u8, token[0..colon]),
@@ -266,7 +266,7 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
 }
 
 fn fileExists(io: std.Io, path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     } else {
         std.Io.Dir.cwd().access(io, path, .{}) catch return false;
@@ -276,7 +276,7 @@ fn fileExists(io: std.Io, path: []const u8) bool {
 
 /// Read a file at `path` (absolute or cwd-relative) fully into memory via `allocator`.
 fn readFileAt(io: std.Io, allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
-    const file = if (std.fs.path.isAbsolute(path))
+    const file = if (std.Io.Dir.path.isAbsolute(path))
         try std.Io.Dir.openFileAbsolute(io, path, .{})
     else
         try std.Io.Dir.cwd().openFile(io, path, .{});
@@ -287,7 +287,7 @@ fn readFileAt(io: std.Io, allocator: std.mem.Allocator, path: []const u8, max_by
 
 fn parentPath(path: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, path, "/")) return null;
-    const parent = std.fs.path.dirname(path) orelse return null;
+    const parent = std.Io.Dir.path.dirname(path) orelse return null;
     if (parent.len == 0) return "/";
     if (std.mem.eql(u8, parent, path)) return null;
     return parent;

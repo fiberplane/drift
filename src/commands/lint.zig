@@ -315,7 +315,7 @@ fn discoverDocGroups(
     var offset: usize = 0;
     while (offset < result.stdout.len) {
         const rest = result.stdout[offset..];
-        const rel_end = std.mem.indexOfScalar(u8, rest, 0) orelse break;
+        const rel_end = std.mem.findScalar(u8, rest, 0) orelse break;
         const line = rest[0..rel_end];
         offset += rel_end + 1;
 
@@ -349,12 +349,12 @@ fn discoverDocGroups(
 /// Check if a relative path has a closer drift.lock than root_path.
 /// Returns true if there's an intermediate drift.lock (the file belongs to a nested scope).
 fn hasNestedLockfile(io: std.Io, root_path: []const u8, rel_path: []const u8, allocator: std.mem.Allocator) bool {
-    var dir: []const u8 = std.fs.path.dirname(rel_path) orelse return false;
+    var dir: []const u8 = std.Io.Dir.path.dirname(rel_path) orelse return false;
 
     while (dir.len > 0) {
-        const candidate = std.fs.path.join(allocator, &.{ root_path, dir, "drift.lock" }) catch return false;
+        const candidate = std.Io.Dir.path.join(allocator, &.{ root_path, dir, "drift.lock" }) catch return false;
         if (pathExists(io, candidate)) return true;
-        dir = std.fs.path.dirname(dir) orelse break;
+        dir = std.Io.Dir.path.dirname(dir) orelse break;
     }
     return false;
 }
@@ -392,7 +392,7 @@ fn checkDocLinks(
     file_cache: *FileCache,
     out: *std.ArrayList(JsonLinkRow),
 ) !void {
-    const absolute_doc_path = try std.fs.path.join(ctx.scratch(), &.{ root_path, doc_path });
+    const absolute_doc_path = try std.Io.Dir.path.join(ctx.scratch(), &.{ root_path, doc_path });
     const content = file_cache.getCurrent(absolute_doc_path) catch return orelse return;
 
     var parsed = (try markdown.parseDocument(ctx.run_arena, content)) orelse return;
@@ -426,18 +426,18 @@ fn classifyRelativeLink(
     const trimmed = std.mem.trim(u8, raw_target, " \t\r\n");
     if (trimmed.len == 0) return null;
     if (trimmed[0] == '#') return null;
-    if (std.fs.path.isAbsolute(trimmed)) return null;
+    if (std.Io.Dir.path.isAbsolute(trimmed)) return null;
     if (hasUriScheme(trimmed)) return null;
 
-    const path_part = if (std.mem.indexOfScalar(u8, trimmed, '#')) |idx| trimmed[0..idx] else trimmed;
+    const path_part = if (std.mem.findScalar(u8, trimmed, '#')) |idx| trimmed[0..idx] else trimmed;
     if (path_part.len == 0) return null;
 
     // Resolve symlinks on the doc path so relative links are computed from the real location.
-    const raw_absolute_doc = try std.fs.path.resolve(ctx.scratch(), &.{ root_path, doc_path });
+    const raw_absolute_doc = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, doc_path });
     const real_doc_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io, raw_absolute_doc, ctx.scratch()) catch raw_absolute_doc;
-    const doc_dir = std.fs.path.dirname(real_doc_path) orelse root_path;
-    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ doc_dir, path_part });
-    const relative = try std.fs.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const doc_dir = std.Io.Dir.path.dirname(real_doc_path) orelse root_path;
+    const absolute = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ doc_dir, path_part });
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     const exists = pathExists(ctx.io, absolute);
     ctx.resetScratch();
 
@@ -458,7 +458,7 @@ fn filePathMatchesChangedPrefix(file_path: []const u8, prefix: []const u8) bool 
     if (prefix.len == 0) return true;
     if (!std.mem.startsWith(u8, file_path, prefix)) return false;
     if (file_path.len == prefix.len) return true;
-    return std.fs.path.isSep(file_path[prefix.len]);
+    return std.Io.Dir.path.isSep(file_path[prefix.len]);
 }
 
 fn docMatchesChangedPath(doc: DocGroup, changed_prefix: []const u8) bool {
@@ -476,12 +476,12 @@ fn normalizeChangedPrefix(
     cwd_path: []const u8,
     raw_path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(raw_path)) {
-        return try std.fs.path.relative(ctx.run_arena, "", null, root_path, raw_path);
+    if (std.Io.Dir.path.isAbsolute(raw_path)) {
+        return try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, raw_path);
     }
 
-    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, raw_path });
-    const relative = try std.fs.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const absolute = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, raw_path });
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
     return relative;
 }
@@ -496,7 +496,7 @@ fn checkBinding(
 ) !AnchorOutcome {
     const sig_hex = binding.fieldValue("sig") orelse return .{ .result = .stale, .reason_code = .baseline_unavailable };
 
-    const absolute_path = try std.fs.path.join(ctx.scratch(), &.{ root_path, parsed.file_path });
+    const absolute_path = try std.Io.Dir.path.join(ctx.scratch(), &.{ root_path, parsed.file_path });
     const current_content = file_cache.getCurrent(absolute_path) catch {
         return .{ .result = .stale, .reason_code = .file_not_readable };
     } orelse {
@@ -509,7 +509,7 @@ fn checkBinding(
                 return .{ .result = .stale, .reason_code = .symbol_not_found };
             }
         } else {
-            const ext = std.fs.path.extension(parsed.file_path);
+            const ext = std.Io.Dir.path.extension(parsed.file_path);
             if (symbols.languageForExtension(ext)) |lang_query| {
                 if (!symbols.resolveSymbolWithTreeSitter(current_content, lang_query, sym)) {
                     return .{ .result = .stale, .reason_code = .symbol_not_found };
