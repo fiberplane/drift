@@ -26,12 +26,12 @@ pub fn parseDocument(allocator: Allocator, source: []const u8) !?ParsedDoc {
     const block_tree = parseBlockTree(source) orelse return null;
     defer block_tree.destroy();
 
-    var ranges: std.ArrayList(ts.Range) = .{};
+    var ranges: std.ArrayList(ts.Range) = .empty;
     defer ranges.deinit(allocator);
     try collectInlineRangesForNode(allocator, block_tree.rootNode(), &ranges);
 
     if (ranges.items.len == 0) {
-        return .{ .links = .{}, .allocator = allocator };
+        return .{ .links = .empty, .allocator = allocator };
     }
 
     var inline_parser = ts.Parser.create();
@@ -42,7 +42,7 @@ pub fn parseDocument(allocator: Allocator, source: []const u8) !?ParsedDoc {
     const inline_tree = inline_parser.parseString(source, null) orelse return null;
     defer inline_tree.destroy();
 
-    var links: std.ArrayList(Link) = .{};
+    var links: std.ArrayList(Link) = .empty;
     errdefer links.deinit(allocator);
     try collectInlineLinks(allocator, source, inline_tree.rootNode(), &links);
 

@@ -63,11 +63,11 @@ pub const ParseError = error{
 };
 
 /// `run` holds durable lockfile state; `scratch` holds walk temporaries and the lockfile file buffer (reset by caller).
-pub fn discover(run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: []const u8) !Lockfile {
+pub fn discover(io: std.Io, run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: []const u8) !Lockfile {
     const resolved_run = if (std.fs.path.isAbsolute(start_path))
         try run.dupe(u8, start_path)
     else
-        try std.fs.cwd().realpathAlloc(run, start_path);
+        try std.Io.Dir.cwd().realPathFileAlloc(io, start_path, run);
     defer run.free(resolved_run);
 
     var current = try scratch.dupe(u8, resolved_run);
@@ -75,19 +75,19 @@ pub fn discover(run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: 
     while (true) {
         const candidate = try std.fs.path.join(scratch, &.{ current, "drift.lock" });
 
-        if (fileExists(candidate)) {
-            return try readAtPath(run, scratch, current, candidate, true);
+        if (fileExists(io, candidate)) {
+            return try readAtPath(io, run, scratch, current, candidate, true);
         }
 
         // Stop at VCS root — don't climb out of the current repository.
-        const has_git = fileExists(try std.fs.path.join(scratch, &.{ current, ".git" }));
-        const has_jj = fileExists(try std.fs.path.join(scratch, &.{ current, ".jj" }));
+        const has_git = fileExists(io, try std.fs.path.join(scratch, &.{ current, ".git" }));
+        const has_jj = fileExists(io, try std.fs.path.join(scratch, &.{ current, ".jj" }));
         if (has_git or has_jj) {
             return .{
                 .root_path = try run.dupe(u8, current),
                 .lockfile_path = try std.fs.path.join(run, &.{ current, "drift.lock" }),
                 .exists = false,
-                .bindings = .{},
+                .bindings = .empty,
             };
         }
 
@@ -96,15 +96,15 @@ pub fn discover(run: std.mem.Allocator, scratch: std.mem.Allocator, start_path: 
                 .root_path = try run.dupe(u8, resolved_run),
                 .lockfile_path = try std.fs.path.join(run, &.{ resolved_run, "drift.lock" }),
                 .exists = false,
-                .bindings = .{},
+                .bindings = .empty,
             };
         };
         current = try scratch.dupe(u8, parent);
     }
 }
 
-pub fn readAtPath(run: std.mem.Allocator, scratch: std.mem.Allocator, root_path: []const u8, lockfile_path: []const u8, exists: bool) !Lockfile {
-    var bindings: std.ArrayList(Binding) = .{};
+pub fn readAtPath(io: std.Io, run: std.mem.Allocator, scratch: std.mem.Allocator, root_path: []const u8, lockfile_path: []const u8, exists: bool) !Lockfile {
+    var bindings: std.ArrayList(Binding) = .empty;
     errdefer {
         for (bindings.items) |*binding| {
             run.free(binding.doc_path);
@@ -119,9 +119,7 @@ pub fn readAtPath(run: std.mem.Allocator, scratch: std.mem.Allocator, root_path:
     }
 
     if (exists) {
-        const file = try openPath(lockfile_path);
-        defer file.close();
-        const content = try file.readToEndAlloc(scratch, 1024 * 1024);
+        const content = try readFileAt(io, scratch, lockfile_path, 1024 * 1024);
         defer scratch.free(content);
         try parseInto(run, content, &bindings);
     }
@@ -144,7 +142,7 @@ pub fn parseInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
 }
 
 pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayList(DocBindings) {
-    var docs: std.ArrayList(DocBindings) = .{};
+    var docs: std.ArrayList(DocBindings) = .empty;
     errdefer {
         for (docs.items) |*doc| doc.bindings.deinit(allocator);
         docs.deinit(allocator);
@@ -164,7 +162,7 @@ pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayL
         } else {
             var doc = DocBindings{
                 .path = binding.doc_path,
-                .bindings = .{},
+                .bindings = .empty,
             };
             errdefer doc.bindings.deinit(allocator);
             try doc.bindings.append(allocator, binding);
@@ -189,7 +187,7 @@ pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayL
     return docs;
 }
 
-fn renderLineToWriter(writer: anytype, binding: Binding) !void {
+fn renderLineToWriter(writer: *std.Io.Writer, binding: Binding) !void {
     try writer.print("{s} -> {s}", .{ binding.doc_path, binding.target });
     for (binding.metadata.items) |field| {
         try writer.print(" {s}:{s}", .{ field.key, field.value });
@@ -197,18 +195,18 @@ fn renderLineToWriter(writer: anytype, binding: Binding) !void {
 }
 
 /// Writes sorted lockfile lines to `writer`. Uses `scratch` for sort temporaries.
-pub fn serializeToWriter(scratch: std.mem.Allocator, writer: anytype, bindings: []const Binding) !void {
-    var lines: std.ArrayList([]const u8) = .{};
+pub fn serializeToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, bindings: []const Binding) !void {
+    var lines: std.ArrayList([]const u8) = .empty;
     defer {
         for (lines.items) |line| scratch.free(line);
         lines.deinit(scratch);
     }
 
     for (bindings) |binding| {
-        var row: std.ArrayList(u8) = .{};
-        errdefer row.deinit(scratch);
-        try renderLineToWriter(row.writer(scratch), binding);
-        try lines.append(scratch, try row.toOwnedSlice(scratch));
+        var row: std.Io.Writer.Allocating = .init(scratch);
+        errdefer row.deinit();
+        try renderLineToWriter(&row.writer, binding);
+        try lines.append(scratch, try row.toOwnedSlice());
     }
 
     std.mem.sort([]const u8, lines.items, {}, struct {
@@ -224,17 +222,17 @@ pub fn serializeToWriter(scratch: std.mem.Allocator, writer: anytype, bindings: 
 }
 
 pub fn serialize(allocator: std.mem.Allocator, bindings: []const Binding) ![]u8 {
-    var output: std.ArrayList(u8) = .{};
-    errdefer output.deinit(allocator);
-    try serializeToWriter(allocator, output.writer(allocator), bindings);
-    return try output.toOwnedSlice(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    try serializeToWriter(allocator, &output.writer, bindings);
+    return try output.toOwnedSlice();
 }
 
-pub fn writeFile(lockfile: *const Lockfile, scratch: std.mem.Allocator) !void {
-    const file = try createPath(lockfile.lockfile_path);
-    defer file.close();
+pub fn writeFile(io: std.Io, lockfile: *const Lockfile, scratch: std.mem.Allocator) !void {
+    const file = try std.Io.Dir.createFileAbsolute(io, lockfile.lockfile_path, .{ .truncate = true });
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var fw = file.writer(&buf);
+    var fw = file.writer(io, &buf);
     defer fw.interface.flush() catch {};
     try serializeToWriter(scratch, &fw.interface, lockfile.bindings.items);
 }
@@ -248,7 +246,7 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
     var tokens = std.mem.tokenizeScalar(u8, rest, ' ');
     const target = tokens.next() orelse return error.InvalidBindingLine;
 
-    var metadata: std.ArrayList(MetadataField) = .{};
+    var metadata: std.ArrayList(MetadataField) = .empty;
     errdefer metadata.deinit(allocator);
 
     while (tokens.next()) |token| {
@@ -267,24 +265,24 @@ fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
     };
 }
 
-fn fileExists(path: []const u8) bool {
-    const file = openPath(path) catch return false;
-    file.close();
+fn fileExists(io: std.Io, path: []const u8) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
+    } else {
+        std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    }
     return true;
 }
 
-fn openPath(path: []const u8) !std.fs.File {
-    if (std.fs.path.isAbsolute(path)) {
-        return std.fs.openFileAbsolute(path, .{});
-    }
-    return std.fs.cwd().openFile(path, .{});
-}
-
-fn createPath(path: []const u8) !std.fs.File {
-    if (std.fs.path.isAbsolute(path)) {
-        return std.fs.createFileAbsolute(path, .{ .truncate = true });
-    }
-    return std.fs.cwd().createFile(path, .{ .truncate = true });
+/// Read a file at `path` (absolute or cwd-relative) fully into memory via `allocator`.
+fn readFileAt(io: std.Io, allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
+    const file = if (std.fs.path.isAbsolute(path))
+        try std.Io.Dir.openFileAbsolute(io, path, .{})
+    else
+        try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var file_reader = file.reader(io, &.{});
+    return try file_reader.interface.allocRemaining(allocator, .limited(max_bytes));
 }
 
 fn parentPath(path: []const u8) ?[]const u8 {
@@ -302,7 +300,7 @@ test "parseInto reads bindings and metadata" {
         "docs/auth.md -> src/auth/login.ts sig:a1b2c3d4e5f6a7b8\n" ++
         "docs/auth.md -> src/auth/provider.ts#AuthConfig sig:1a2b3c4d5e6f7890 origin:github:fiberplane/drift\n";
 
-    var bindings: std.ArrayList(Binding) = .{};
+    var bindings: std.ArrayList(Binding) = .empty;
     defer {
         for (bindings.items) |*binding| {
             allocator.free(binding.doc_path);
@@ -327,7 +325,7 @@ test "parseInto reads bindings and metadata" {
 test "serialize sorts lines and appends trailing newline" {
     const allocator = std.testing.allocator;
 
-    var bindings: std.ArrayList(Binding) = .{};
+    var bindings: std.ArrayList(Binding) = .empty;
     defer {
         for (bindings.items) |*binding| {
             allocator.free(binding.doc_path);
@@ -344,12 +342,12 @@ test "serialize sorts lines and appends trailing newline" {
     try bindings.append(allocator, .{
         .doc_path = try allocator.dupe(u8, "docs/z.md"),
         .target = try allocator.dupe(u8, "src/z.ts"),
-        .metadata = .{},
+        .metadata = .empty,
     });
     try bindings.append(allocator, .{
         .doc_path = try allocator.dupe(u8, "docs/a.md"),
         .target = try allocator.dupe(u8, "src/a.ts"),
-        .metadata = .{},
+        .metadata = .empty,
     });
 
     const content = try serialize(allocator, bindings.items);
@@ -363,22 +361,23 @@ test "serialize sorts lines and appends trailing newline" {
 
 test "discover walks up to find drift.lock" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
     var scratch_arena = std.heap.ArenaAllocator.init(allocator);
     defer scratch_arena.deinit();
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("repo/nested/work");
-    try tmp.dir.writeFile(.{
+    try tmp.dir.createDirPath(io, "repo/nested/work");
+    try tmp.dir.writeFile(io, .{
         .sub_path = "repo/drift.lock",
         .data = "docs/doc.md -> src/main.ts sig:abc123\n",
     });
 
-    const start_path = try tmp.dir.realpathAlloc(allocator, "repo/nested/work");
+    const start_path = try tmp.dir.realPathFileAlloc(io, "repo/nested/work", allocator);
     defer allocator.free(start_path);
 
-    var discovered = try discover(allocator, scratch_arena.allocator(), start_path);
+    var discovered = try discover(io, allocator, scratch_arena.allocator(), start_path);
     defer {
         for (discovered.bindings.items) |*b| {
             allocator.free(b.doc_path);
@@ -402,18 +401,19 @@ test "discover walks up to find drift.lock" {
 
 test "discover returns empty lockfile rooted at start path when missing" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
     var scratch_arena = std.heap.ArenaAllocator.init(allocator);
     defer scratch_arena.deinit();
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.makePath("repo/.git");
+    try tmp.dir.createDirPath(io, "repo/.git");
 
-    const start_path = try tmp.dir.realpathAlloc(allocator, "repo");
+    const start_path = try tmp.dir.realPathFileAlloc(io, "repo", allocator);
     defer allocator.free(start_path);
 
-    var discovered = try discover(allocator, scratch_arena.allocator(), start_path);
+    var discovered = try discover(io, allocator, scratch_arena.allocator(), start_path);
     defer {
         discovered.bindings.deinit(allocator);
         allocator.free(discovered.root_path);

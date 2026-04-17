@@ -15,24 +15,41 @@ pub fn detectVcs() VcsKind {
     return .git;
 }
 
+fn runGit(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd_path: []const u8,
+    stdout_limit: std.Io.Limit,
+) !std.process.RunResult {
+    return std.process.run(allocator, io, .{
+        .argv = argv,
+        .cwd = .{ .path = cwd_path },
+        .stdout_limit = stdout_limit,
+        .stderr_limit = stdout_limit,
+    });
+}
+
 /// Get the last commit/change ID that touched a given file path.
-pub fn getLastCommit(allocator: std.mem.Allocator, cwd_path: []const u8, file_path: []const u8, vcs: VcsKind) !?[]const u8 {
+pub fn getLastCommit(io: std.Io, allocator: std.mem.Allocator, cwd_path: []const u8, file_path: []const u8, vcs: VcsKind) !?[]const u8 {
     const result = switch (vcs) {
-        .git => try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "git", "log", "-1", "--format=%H", "--", file_path },
-            .cwd = cwd_path,
-            .max_output_bytes = 256 * 1024,
-        }),
+        .git => try runGit(
+            io,
+            allocator,
+            &.{ "git", "log", "-1", "--format=%H", "--", file_path },
+            cwd_path,
+            .limited(256 * 1024),
+        ),
         .jj => blk: {
             const revset = try std.fmt.allocPrint(allocator, "latest(::@ & file(\"{s}\"))", .{file_path});
             defer allocator.free(revset);
-            break :blk try std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &.{ "jj", "log", "-r", revset, "--no-graph", "-T", "change_id ++ \"\\n\"", "--color=never" },
-                .cwd = cwd_path,
-                .max_output_bytes = 256 * 1024,
-            });
+            break :blk try runGit(
+                io,
+                allocator,
+                &.{ "jj", "log", "-r", revset, "--no-graph", "-T", "change_id ++ \"\\n\"", "--color=never" },
+                cwd_path,
+                .limited(256 * 1024),
+            );
         },
     };
     defer allocator.free(result.stderr);
@@ -44,7 +61,7 @@ pub fn getLastCommit(allocator: std.mem.Allocator, cwd_path: []const u8, file_pa
     }
 
     // Trim trailing newline
-    const trimmed = std.mem.trimRight(u8, stdout, "\n\r ");
+    const trimmed = std.mem.trimEnd(u8, stdout, "\n\r ");
     if (trimmed.len == 0) {
         allocator.free(stdout);
         return null;
@@ -57,6 +74,7 @@ pub fn getLastCommit(allocator: std.mem.Allocator, cwd_path: []const u8, file_pa
 
 /// Check if a bound file was modified after the given commit/change.
 pub fn checkStaleness(
+    io: std.Io,
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
     doc_commit: []const u8,
@@ -67,34 +85,37 @@ pub fn checkStaleness(
         .git => blk: {
             const range = try std.fmt.allocPrint(allocator, "{s}..HEAD", .{doc_commit});
             defer allocator.free(range);
-            break :blk try std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &.{ "git", "log", "--oneline", range, "--", bound_file },
-                .cwd = cwd_path,
-                .max_output_bytes = 256 * 1024,
-            });
+            break :blk try runGit(
+                io,
+                allocator,
+                &.{ "git", "log", "--oneline", range, "--", bound_file },
+                cwd_path,
+                .limited(256 * 1024),
+            );
         },
         .jj => blk: {
             const revset = try std.fmt.allocPrint(allocator, "{s}..@ & file(\"{s}\")", .{ doc_commit, bound_file });
             defer allocator.free(revset);
-            break :blk try std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &.{ "jj", "log", "-r", revset, "--no-graph", "-T", "change_id ++ \"\\n\"", "--color=never" },
-                .cwd = cwd_path,
-                .max_output_bytes = 256 * 1024,
-            });
+            break :blk try runGit(
+                io,
+                allocator,
+                &.{ "jj", "log", "-r", revset, "--no-graph", "-T", "change_id ++ \"\\n\"", "--color=never" },
+                cwd_path,
+                .limited(256 * 1024),
+            );
         },
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    const trimmed = std.mem.trimRight(u8, result.stdout, "\n\r ");
+    const trimmed = std.mem.trimEnd(u8, result.stdout, "\n\r ");
     return trimmed.len > 0;
 }
 
 /// Get file content at a specific revision. Returns null if the file didn't exist at that revision.
 /// Caller owns returned memory.
 pub fn getFileAtRevision(
+    io: std.Io,
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
     revision: []const u8,
@@ -112,17 +133,12 @@ pub fn getFileAtRevision(
         .jj => &.{ "jj", "file", "show", "-r", revision, file_path },
     };
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd_path,
-        .max_output_bytes = 1024 * 1024,
-    }) catch return null;
+    const result = runGit(io, allocator, argv, cwd_path, .limited(1024 * 1024)) catch return null;
     defer allocator.free(result.stderr);
 
     // Non-zero exit means the file didn't exist at that revision
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 allocator.free(result.stdout);
                 return null;
@@ -155,7 +171,7 @@ pub const BlameInfo = struct {
 };
 
 fn parseBlameInfoOutput(allocator: std.mem.Allocator, stdout: []const u8) !?BlameInfo {
-    const trimmed = std.mem.trimRight(u8, stdout, "\n\r ");
+    const trimmed = std.mem.trimEnd(u8, stdout, "\n\r ");
     if (trimmed.len == 0) return null;
 
     var lines = std.mem.splitScalar(u8, trimmed, '\n');
@@ -185,6 +201,7 @@ fn parseBlameInfoOutput(allocator: std.mem.Allocator, stdout: []const u8) !?Blam
 /// Returns null if no commits changed the file after the revision.
 /// String fields are allocated with `result_allocator`. Subprocess I/O buffers use `subprocess_allocator`.
 pub fn getBlameInfo(
+    io: std.Io,
     result_allocator: std.mem.Allocator,
     subprocess_allocator: std.mem.Allocator,
     cwd_path: []const u8,
@@ -197,12 +214,13 @@ pub fn getBlameInfo(
             const range = try std.fmt.allocPrint(subprocess_allocator, "{s}..HEAD", .{after_revision});
             defer subprocess_allocator.free(range);
 
-            const result = std.process.Child.run(.{
-                .allocator = subprocess_allocator,
-                .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", range, "--", file_path },
-                .cwd = cwd_path,
-                .max_output_bytes = 256 * 1024,
-            }) catch return null;
+            const result = runGit(
+                io,
+                subprocess_allocator,
+                &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", range, "--", file_path },
+                cwd_path,
+                .limited(256 * 1024),
+            ) catch return null;
             defer subprocess_allocator.free(result.stderr);
             defer subprocess_allocator.free(result.stdout);
 
@@ -215,6 +233,7 @@ pub fn getBlameInfo(
 /// Get blame info for the most recent commit that touched a file, regardless of baseline.
 /// String fields are allocated with `result_allocator`. Subprocess I/O buffers use `subprocess_allocator`.
 pub fn getLatestBlameInfo(
+    io: std.Io,
     result_allocator: std.mem.Allocator,
     subprocess_allocator: std.mem.Allocator,
     cwd_path: []const u8,
@@ -223,12 +242,13 @@ pub fn getLatestBlameInfo(
 ) !?BlameInfo {
     switch (vcs_kind) {
         .git => {
-            const result = std.process.Child.run(.{
-                .allocator = subprocess_allocator,
-                .argv = &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", "--", file_path },
-                .cwd = cwd_path,
-                .max_output_bytes = 256 * 1024,
-            }) catch return null;
+            const result = runGit(
+                io,
+                subprocess_allocator,
+                &.{ "git", "log", "-1", "--format=%an%n%H%n%cd%n%s", "--date=iso-strict", "--", file_path },
+                cwd_path,
+                .limited(256 * 1024),
+            ) catch return null;
             defer subprocess_allocator.free(result.stderr);
             defer subprocess_allocator.free(result.stdout);
 
@@ -243,7 +263,7 @@ pub fn getLatestBlameInfo(
 /// and SSH URL (`ssh://git@github.com/owner/repo`) formats.
 /// Strips `.git` suffix and trailing slashes. Returns null for non-GitHub URLs.
 pub fn normalizeGitHubUrl(allocator: std.mem.Allocator, url: []const u8) ?[]const u8 {
-    const trimmed = std.mem.trimRight(u8, url, " \t\n\r/");
+    const trimmed = std.mem.trimEnd(u8, url, " \t\n\r/");
 
     // Extract the owner/repo path from the URL
     const path = blk: {
@@ -276,42 +296,45 @@ pub fn normalizeGitHubUrl(allocator: std.mem.Allocator, url: []const u8) ?[]cons
 /// Get the normalized repo identity by querying `git remote get-url origin`.
 /// Returns `github:owner/repo` or null if not a GitHub remote.
 /// Result string is allocated with `result_allocator`; subprocess buffers use `subprocess_allocator`.
-pub fn getRepoIdentity(result_allocator: std.mem.Allocator, subprocess_allocator: std.mem.Allocator, cwd_path: []const u8) ?[]const u8 {
-    const result = std.process.Child.run(.{
-        .allocator = subprocess_allocator,
-        .argv = &.{ "git", "remote", "get-url", "origin" },
-        .cwd = cwd_path,
-        .max_output_bytes = 4096,
-    }) catch return null;
+pub fn getRepoIdentity(io: std.Io, result_allocator: std.mem.Allocator, subprocess_allocator: std.mem.Allocator, cwd_path: []const u8) ?[]const u8 {
+    const result = runGit(
+        io,
+        subprocess_allocator,
+        &.{ "git", "remote", "get-url", "origin" },
+        cwd_path,
+        .limited(4096),
+    ) catch return null;
     defer subprocess_allocator.free(result.stderr);
     defer subprocess_allocator.free(result.stdout);
 
     switch (result.term) {
-        .Exited => |code| if (code != 0) return null,
+        .exited => |code| if (code != 0) return null,
         else => return null,
     }
 
-    const trimmed = std.mem.trimRight(u8, result.stdout, "\n\r ");
+    const trimmed = std.mem.trimEnd(u8, result.stdout, "\n\r ");
     if (trimmed.len == 0) return null;
 
     return normalizeGitHubUrl(result_allocator, trimmed);
 }
 
 /// Get the current change/commit ID (short form) for auto-provenance.
-pub fn getCurrentChangeId(allocator: std.mem.Allocator, cwd_path: []const u8, vcs: VcsKind) !?[]const u8 {
+pub fn getCurrentChangeId(io: std.Io, allocator: std.mem.Allocator, cwd_path: []const u8, vcs: VcsKind) !?[]const u8 {
     const result = switch (vcs) {
-        .git => try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "git", "rev-parse", "--short", "HEAD" },
-            .cwd = cwd_path,
-            .max_output_bytes = 256 * 1024,
-        }),
-        .jj => try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "jj", "log", "-r", "@", "--no-graph", "-T", "change_id.shortest(8)", "--color=never" },
-            .cwd = cwd_path,
-            .max_output_bytes = 256 * 1024,
-        }),
+        .git => try runGit(
+            io,
+            allocator,
+            &.{ "git", "rev-parse", "--short", "HEAD" },
+            cwd_path,
+            .limited(256 * 1024),
+        ),
+        .jj => try runGit(
+            io,
+            allocator,
+            &.{ "jj", "log", "-r", "@", "--no-graph", "-T", "change_id.shortest(8)", "--color=never" },
+            cwd_path,
+            .limited(256 * 1024),
+        ),
     };
     defer allocator.free(result.stderr);
 
@@ -321,7 +344,7 @@ pub fn getCurrentChangeId(allocator: std.mem.Allocator, cwd_path: []const u8, vc
         return null;
     }
 
-    const trimmed = std.mem.trimRight(u8, stdout, "\n\r ");
+    const trimmed = std.mem.trimEnd(u8, stdout, "\n\r ");
     if (trimmed.len == 0) {
         allocator.free(stdout);
         return null;
@@ -335,34 +358,37 @@ pub fn getCurrentChangeId(allocator: std.mem.Allocator, cwd_path: []const u8, vc
 /// Persistent `git cat-file --batch` process for fetching historical file
 /// content without spawning a new process per query.
 pub const GitCatFile = struct {
+    io: std.Io,
     child: std.process.Child,
     read_buf: []u8,
-    stdout_reader: std.fs.File.Reader,
+    stdout_reader: std.Io.File.Reader,
     allocator: std.mem.Allocator,
 
     const read_buf_size = 8192;
 
-    pub fn init(allocator: std.mem.Allocator, cwd_path: []const u8) !GitCatFile {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, cwd_path: []const u8) !GitCatFile {
         const read_buf = try allocator.alloc(u8, read_buf_size);
         errdefer allocator.free(read_buf);
 
-        var child = std.process.Child.init(
-            &.{ "git", "cat-file", "--batch" },
-            allocator,
-        );
-        child.cwd = cwd_path;
-        child.stdin_behavior = .Pipe;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
-        try child.spawn();
+        var child = try std.process.spawn(io, .{
+            .argv = &.{ "git", "cat-file", "--batch" },
+            .cwd = .{ .path = cwd_path },
+            .stdin = .pipe,
+            .stdout = .pipe,
+            .stderr = .ignore,
+        });
+        errdefer {
+            child.kill(io);
+        }
 
         var result: GitCatFile = .{
+            .io = io,
             .child = child,
             .read_buf = read_buf,
             .stdout_reader = undefined,
             .allocator = allocator,
         };
-        result.stdout_reader = result.child.stdout.?.readerStreaming(result.read_buf);
+        result.stdout_reader = result.child.stdout.?.readerStreaming(io, result.read_buf);
         return result;
     }
 
@@ -371,10 +397,10 @@ pub const GitCatFile = struct {
     pub fn getContent(self: *GitCatFile, allocator: std.mem.Allocator, revision: []const u8, file_path: []const u8) !?[]const u8 {
         const stdin = self.child.stdin orelse return error.BrokenPipe;
 
-        stdin.writeAll(revision) catch return null;
-        stdin.writeAll(":") catch return null;
-        stdin.writeAll(file_path) catch return null;
-        stdin.writeAll("\n") catch return null;
+        stdin.writeStreamingAll(self.io, revision) catch return null;
+        stdin.writeStreamingAll(self.io, ":") catch return null;
+        stdin.writeStreamingAll(self.io, file_path) catch return null;
+        stdin.writeStreamingAll(self.io, "\n") catch return null;
 
         const header = self.stdout_reader.interface.takeDelimiterExclusive('\n') catch return null;
 
@@ -401,10 +427,10 @@ pub const GitCatFile = struct {
 
     pub fn deinit(self: *GitCatFile) void {
         if (self.child.stdin) |stdin| {
-            stdin.close();
+            stdin.close(self.io);
             self.child.stdin = null;
         }
-        _ = self.child.wait() catch {};
+        _ = self.child.wait(self.io) catch {};
         self.allocator.free(self.read_buf);
     }
 };

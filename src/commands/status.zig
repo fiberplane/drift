@@ -5,12 +5,12 @@ const lockfile = @import("../lockfile.zig");
 
 pub const Format = lint.Format;
 
-pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, format: Format) !void {
+pub fn run(ctx: CommandContext, stdout_w: *std.Io.Writer, stderr_w: *std.Io.Writer, format: Format) !void {
     _ = stderr_w;
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
     var docs = try lockfile.groupByDoc(ctx.run_arena, lf.bindings.items);
@@ -25,7 +25,7 @@ pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writ
     }
 }
 
-fn writeDocsText(w: *std.io.Writer, docs: []const lockfile.DocBindings) void {
+fn writeDocsText(w: *std.Io.Writer, docs: []const lockfile.DocBindings) void {
     if (docs.len == 0) return;
 
     for (docs, 0..) |doc, idx| {
@@ -48,7 +48,7 @@ fn writeDocsText(w: *std.io.Writer, docs: []const lockfile.DocBindings) void {
     }
 }
 
-fn writeDocsJson(w: *std.io.Writer, docs: []const lockfile.DocBindings) !void {
+fn writeDocsJson(w: *std.Io.Writer, docs: []const lockfile.DocBindings) !void {
     var json_w: std.json.Stringify = .{ .writer = w, .options = .{} };
 
     try json_w.beginArray();
