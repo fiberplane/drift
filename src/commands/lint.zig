@@ -116,6 +116,10 @@ const DocCheckResult = struct {
     result: DocResult,
     anchors: std.ArrayList(JsonAnchorRow),
     links: std.ArrayList(JsonLinkRow),
+    /// Populated when `checkBinding` fails for a binding in this doc. The main
+    /// thread re-raises this as `error.LintCheckFailed` during the merge step,
+    /// since `Io.Group.async` cannot propagate errors out of tasks.
+    error_message: ?[]const u8 = null,
 };
 
 const CheckResult = struct {
@@ -178,10 +182,6 @@ pub fn run(
     const detected_vcs = vcs.detectVcs();
     const repo_identity = vcs.getRepoIdentity(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
 
-    var file_cache: FileCache = undefined;
-    file_cache.init(ctx.io, ctx.run_arena);
-    defer file_cache.deinit();
-
     const normalized_changed = if (changed_path) |raw|
         try normalizeChangedPrefix(ctx, lf.root_path, cwd_path, raw)
     else
@@ -204,84 +204,40 @@ pub fn run(
         .links_broken = 0,
     };
 
-    var checked_any = false;
-    for (doc_groups.items) |doc| {
+    // Pre-allocate one result slot per doc so each task writes into disjoint
+    // memory. Tasks produce results independently; we merge in doc-order on
+    // the main thread below to preserve deterministic output.
+    const results = try ctx.run_arena.alloc(?DocCheckResult, doc_groups.items.len);
+    @memset(results, null);
+
+    var group: std.Io.Group = .init;
+    defer group.cancel(ctx.io);
+
+    for (doc_groups.items, 0..) |doc, i| {
         if (normalized_changed) |prefix| {
             if (!docMatchesChangedPath(doc, prefix)) continue;
         }
+        group.async(ctx.io, checkOneDoc, .{
+            ctx.io,
+            ctx.run_arena,
+            lf.root_path,
+            doc,
+            detected_vcs,
+            repo_identity,
+            &results[i],
+        });
+    }
+    try group.await(ctx.io);
+
+    var checked_any = false;
+    for (results) |maybe| {
+        const doc_result = maybe orelse continue;
         checked_any = true;
-
-        var doc_result = DocCheckResult{
-            .path = doc.path,
-            .origin = commonOrigin(doc.bindings.items),
-            .result = .fresh,
-            .anchors = .empty,
-            .links = .empty,
-        };
-
-        var fresh_count: usize = 0;
-        var stale_count: usize = 0;
-        var skip_count: usize = 0;
-
-        for (doc.bindings.items) |binding| {
-            ctx.resetScratch();
-            const parsed = target.parse(binding.target);
-            const origin = binding.fieldValue("origin");
-
-            const outcome = blk: {
-                if (origin) |o| {
-                    const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
-                    if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
-                }
-                break :blk checkBinding(ctx, lf.root_path, binding, parsed, &file_cache, detected_vcs) catch |err| {
-                    stderr_w.print("error checking {s}: {s}\n", .{ binding.target, @errorName(err) }) catch {};
-                    return error.LintCheckFailed;
-                };
-            };
-
-            try doc_result.anchors.append(ctx.run_arena, jsonAnchorFromOutcome(binding.target, binding.fieldValue("sig"), parsed, outcome));
-            switch (outcome.result) {
-                .fresh => fresh_count += 1,
-                .stale => stale_count += 1,
-                .skip => skip_count += 1,
-            }
+        if (doc_result.error_message) |msg| {
+            stderr_w.print("{s}", .{msg}) catch {};
+            return error.LintCheckFailed;
         }
-
-        try checkDocLinks(ctx, lf.root_path, doc.path, &file_cache, &doc_result.links);
-
-        var broken_links: usize = 0;
-        for (doc_result.links.items) |link| {
-            if (std.mem.eql(u8, link.wire.result, "broken")) broken_links += 1;
-        }
-
-        doc_result.result = if (broken_links > 0)
-            .broken
-        else if (stale_count > 0)
-            .stale
-        else if (fresh_count == 0 and skip_count > 0)
-            .skip
-        else
-            .fresh;
-
-        result.docs_total += 1;
-        result.anchors_total += @intCast(doc.bindings.items.len);
-        result.anchors_fresh += @intCast(fresh_count);
-        result.anchors_stale += @intCast(stale_count);
-        result.anchors_skipped += @intCast(skip_count);
-        result.links_total += @intCast(doc_result.links.items.len);
-        result.links_broken += @intCast(broken_links);
-
-        switch (doc_result.result) {
-            .fresh => result.docs_fresh += 1,
-            .skip => result.docs_skipped += 1,
-            .stale, .broken => {
-                result.docs_stale += 1;
-                result.failed = true;
-            },
-        }
-        if (broken_links > 0) result.failed = true;
-
-        try result.docs.append(ctx.run_arena, doc_result);
+        mergeDocResult(ctx.run_arena, &result, doc_result) catch |err| return err;
     }
 
     switch (format) {
@@ -290,6 +246,153 @@ pub fn run(
     }
 
     return if (result.failed) .fail else .pass;
+}
+
+/// Per-doc check task, spawned once per `DocGroup` inside `Io.Group`.
+///
+/// Creates a task-local scratch arena and task-local `FileCache` so tasks do
+/// not contend on shared state. The `run_arena` allocator is threadsafe (see
+/// `std.heap.ArenaAllocator`), so persistent allocations (anchor rows, link
+/// rows, strings) go there. Errors from `checkBinding` are stored on `out`
+/// (via `error_message`) and re-raised by the main thread during merge —
+/// `Io.Group.async` cannot propagate errors back out of a task.
+fn checkOneDoc(
+    io: std.Io,
+    run_arena: std.mem.Allocator,
+    root_path: []const u8,
+    doc: DocGroup,
+    detected_vcs: vcs.VcsKind,
+    repo_identity: ?[]const u8,
+    out: *?DocCheckResult,
+) void {
+    checkOneDocInner(io, run_arena, root_path, doc, detected_vcs, repo_identity, out) catch |err| {
+        // Persist the failure into the result slot so the main thread can
+        // surface it as `error.LintCheckFailed` after `group.await`.
+        const msg = std.fmt.allocPrint(run_arena, "error checking doc {s}: {s}\n", .{ doc.path, @errorName(err) }) catch "error checking doc (out of memory)\n";
+        out.* = DocCheckResult{
+            .path = doc.path,
+            .origin = null,
+            .result = .broken,
+            .anchors = .empty,
+            .links = .empty,
+            .error_message = msg,
+        };
+    };
+}
+
+fn checkOneDocInner(
+    io: std.Io,
+    run_arena: std.mem.Allocator,
+    root_path: []const u8,
+    doc: DocGroup,
+    detected_vcs: vcs.VcsKind,
+    repo_identity: ?[]const u8,
+    out: *?DocCheckResult,
+) !void {
+    var task_scratch = std.heap.ArenaAllocator.init(run_arena);
+    defer task_scratch.deinit();
+
+    const task_ctx = CommandContext{
+        .io = io,
+        .run_arena = run_arena,
+        .scratch_arena = &task_scratch,
+    };
+
+    var file_cache: FileCache = undefined;
+    file_cache.init(io, run_arena);
+    defer file_cache.deinit();
+
+    var doc_result = DocCheckResult{
+        .path = doc.path,
+        .origin = commonOrigin(doc.bindings.items),
+        .result = .fresh,
+        .anchors = .empty,
+        .links = .empty,
+    };
+
+    var fresh_count: usize = 0;
+    var stale_count: usize = 0;
+    var skip_count: usize = 0;
+
+    for (doc.bindings.items) |binding| {
+        task_ctx.resetScratch();
+        const parsed = target.parse(binding.target);
+        const origin = binding.fieldValue("origin");
+
+        const outcome = blk: {
+            if (origin) |o| {
+                const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
+                if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
+            }
+            break :blk checkBinding(task_ctx, root_path, binding, parsed, &file_cache, detected_vcs) catch |err| {
+                const msg = try std.fmt.allocPrint(run_arena, "error checking {s}: {s}\n", .{ binding.target, @errorName(err) });
+                doc_result.error_message = msg;
+                out.* = doc_result;
+                return;
+            };
+        };
+
+        try doc_result.anchors.append(run_arena, jsonAnchorFromOutcome(binding.target, binding.fieldValue("sig"), parsed, outcome));
+        switch (outcome.result) {
+            .fresh => fresh_count += 1,
+            .stale => stale_count += 1,
+            .skip => skip_count += 1,
+        }
+    }
+
+    try checkDocLinks(task_ctx, root_path, doc.path, &file_cache, &doc_result.links);
+
+    var broken_links: usize = 0;
+    for (doc_result.links.items) |link| {
+        if (std.mem.eql(u8, link.wire.result, "broken")) broken_links += 1;
+    }
+
+    doc_result.result = if (broken_links > 0)
+        .broken
+    else if (stale_count > 0)
+        .stale
+    else if (fresh_count == 0 and skip_count > 0)
+        .skip
+    else
+        .fresh;
+
+    out.* = doc_result;
+}
+
+fn mergeDocResult(run_arena: std.mem.Allocator, result: *CheckResult, doc_result: DocCheckResult) !void {
+    var broken_links: usize = 0;
+    for (doc_result.links.items) |link| {
+        if (std.mem.eql(u8, link.wire.result, "broken")) broken_links += 1;
+    }
+    var fresh_anchors: usize = 0;
+    var stale_anchors: usize = 0;
+    var skip_anchors: usize = 0;
+    for (doc_result.anchors.items) |row| {
+        const r = row.wire.result;
+        if (std.mem.eql(u8, r, "fresh")) fresh_anchors += 1 //
+        else if (std.mem.eql(u8, r, "stale")) stale_anchors += 1 //
+        else if (std.mem.eql(u8, r, "skip")) skip_anchors += 1;
+    }
+
+    result.docs_total += 1;
+    result.anchors_total += @intCast(doc_result.anchors.items.len);
+    result.anchors_fresh += @intCast(fresh_anchors);
+    result.anchors_stale += @intCast(stale_anchors);
+    result.anchors_skipped += @intCast(skip_anchors);
+    result.links_total += @intCast(doc_result.links.items.len);
+    result.links_broken += @intCast(broken_links);
+
+    switch (doc_result.result) {
+        .fresh => result.docs_fresh += 1,
+        .skip => result.docs_skipped += 1,
+        .stale, .broken => {
+            result.docs_stale += 1;
+            result.failed = true;
+        },
+    }
+    if (broken_links > 0) result.failed = true;
+
+    try result.docs.append(run_arena, doc_result);
 }
 
 fn discoverDocGroups(
