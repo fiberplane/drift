@@ -91,8 +91,9 @@ fn parseExOrReport(
     comptime value_parsers: anytype,
     allocator: std.mem.Allocator,
     diag: *clap.Diagnostic,
+    io: std.Io,
     stderr_w: *std.Io.Writer,
-    iter: *std.process.ArgIterator,
+    iter: *std.process.Args.Iterator,
     terminating_positional: usize,
 ) clap.ResultEx(clap.Help, params, value_parsers) {
     return clap.parseEx(clap.Help, params, value_parsers, iter, .{
@@ -100,31 +101,30 @@ fn parseExOrReport(
         .allocator = allocator,
         .terminating_positional = terminating_positional,
     }) catch |err| {
-        diag.report(stderr_w, err) catch {};
+        diag.reportToFile(io, .stderr(), err) catch {};
         fatal(stderr_w, "", .{});
     };
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
 
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
-    var stdout_w = std.fs.File.stdout().writer(&stdout_buf);
-    var stderr_w = std.fs.File.stderr().writer(&stderr_buf);
+    var stdout_w = std.Io.File.stdout().writer(io, &stdout_buf);
+    var stderr_w = std.Io.File.stderr().writer(io, &stderr_buf);
     defer stdout_w.interface.flush() catch {};
     defer stderr_w.interface.flush() catch {};
 
-    var iter = try std.process.ArgIterator.initWithAllocator(allocator);
+    var iter = try init.minimal.args.iterateAllocator(gpa);
     defer iter.deinit();
     _ = iter.next(); // skip executable name
 
     var diag = clap.Diagnostic{};
     var res = clap.parseEx(clap.Help, &main_params, main_parsers, &iter, .{
         .diagnostic = &diag,
-        .allocator = allocator,
+        .allocator = gpa,
         .terminating_positional = 0,
     }) catch |err| switch (err) {
         error.NameNotPartOfEnum => {
@@ -133,7 +133,7 @@ pub fn main() !void {
             fatal(&stderr_w.interface, "", .{});
         },
         else => {
-            diag.report(&stderr_w.interface, err) catch {};
+            diag.reportToFile(io, .stderr(), err) catch {};
             fatal(&stderr_w.interface, "", .{});
         },
     };
@@ -158,7 +158,7 @@ pub fn main() !void {
 
     switch (command) {
         .check, .lint => {
-            var sub = parseExOrReport(&check_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = parseExOrReport(&check_params, clap.parsers.default, gpa, &diag, io, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
                 fatal(&stderr_w.interface, "usage: drift check [--format text|json] [--changed <path>] [--silent]\n", .{});
@@ -166,16 +166,13 @@ pub fn main() !void {
             const format = parseFormat(sub.args.format, &stderr_w.interface);
             const silent = sub.args.silent != 0;
             var null_buf: [1]u8 = undefined;
-            var null_file = std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only }) catch
-                fatal(&stderr_w.interface, "error: cannot open /dev/null\n", .{});
-            defer null_file.close();
-            var null_w = null_file.writer(&null_buf);
-            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            var discarding = std.Io.Writer.Discarding.init(&null_buf);
+            var run_arena = std.heap.ArenaAllocator.init(gpa);
             defer run_arena.deinit();
-            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
-            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            const out_w = if (silent) &null_w.interface else &stdout_w.interface;
+            const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            const out_w = if (silent) &discarding.writer else &stdout_w.interface;
             const run_status = lint.run(ctx, out_w, &stderr_w.interface, format, sub.args.changed) catch |err| switch (err) {
                 error.LintCheckFailed => {
                     stdout_w.interface.flush() catch {};
@@ -194,23 +191,23 @@ pub fn main() !void {
             }
         },
         .status => {
-            var sub = parseExOrReport(&format_params, clap.parsers.default, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = parseExOrReport(&format_params, clap.parsers.default, gpa, &diag, io, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
                 fatal(&stderr_w.interface, "usage: drift status [--format text|json]\n", .{});
             }
             const format = parseFormat(sub.args.format, &stderr_w.interface);
-            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            var run_arena = std.heap.ArenaAllocator.init(gpa);
             defer run_arena.deinit();
-            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
-            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             status.run(ctx, &stdout_w.interface, &stderr_w.interface, format) catch |err| {
                 exitWithError(&stderr_w.interface, err);
             };
         },
         .link => {
-            var sub = parseExOrReport(&link_params, link_parsers, allocator, &diag, &stderr_w.interface, &iter, 0);
+            var sub = parseExOrReport(&link_params, link_parsers, gpa, &diag, io, &stderr_w.interface, &iter, 0);
             defer sub.deinit();
             var doc_is_still_accurate = sub.args.@"doc-is-still-accurate" != 0;
             const doc_path = sub.positionals[0] orelse {
@@ -231,11 +228,11 @@ pub fn main() !void {
             if (has_extra_args) {
                 fatal(&stderr_w.interface, "usage: drift link <doc-path> [anchor] [--doc-is-still-accurate]\n", .{});
             }
-            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            var run_arena = std.heap.ArenaAllocator.init(gpa);
             defer run_arena.deinit();
-            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
-            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             link.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, optional_anchor, doc_is_still_accurate) catch |err| switch (err) {
                 error.DocReadFailed, error.NoBindingsForDoc => {
                     fatal(&stderr_w.interface, "", .{});
@@ -253,7 +250,7 @@ pub fn main() !void {
             };
         },
         .unlink => {
-            var sub = parseExOrReport(&unlink_params, unlink_parsers, allocator, &diag, &stderr_w.interface, &iter, clap_parse_all);
+            var sub = parseExOrReport(&unlink_params, unlink_parsers, gpa, &diag, io, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             const doc_path = sub.positionals[0] orelse {
                 fatal(&stderr_w.interface, "usage: drift unlink <doc-path> <anchor>\n", .{});
@@ -264,11 +261,11 @@ pub fn main() !void {
             if (iter.next()) |_| {
                 fatal(&stderr_w.interface, "usage: drift unlink <doc-path> <anchor>\n", .{});
             }
-            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            var run_arena = std.heap.ArenaAllocator.init(gpa);
             defer run_arena.deinit();
-            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
-            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             unlink.run(ctx, &stdout_w.interface, &stderr_w.interface, doc_path, anchor) catch |err| {
                 exitWithError(&stderr_w.interface, err);
             };
@@ -280,11 +277,11 @@ pub fn main() !void {
             if (iter.next()) |_| {
                 fatal(&stderr_w.interface, "usage: drift refs <path>\n", .{});
             }
-            var run_arena = std.heap.ArenaAllocator.init(allocator);
+            var run_arena = std.heap.ArenaAllocator.init(gpa);
             defer run_arena.deinit();
-            var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+            var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
-            const ctx = CommandContext{ .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
+            const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
             refs.run(ctx, &stdout_w.interface, &stderr_w.interface, target) catch |err| {
                 exitWithError(&stderr_w.interface, err);
             };
@@ -293,7 +290,7 @@ pub fn main() !void {
     }
 }
 
-fn printUsage(w: *std.io.Writer) void {
+fn printUsage(w: *std.Io.Writer) void {
     w.print(
         \\drift — bind docs to code, lint for drift
         \\
@@ -315,13 +312,13 @@ fn printUsage(w: *std.io.Writer) void {
     , .{}) catch {};
 }
 
-fn fatal(stderr_w: *std.io.Writer, comptime fmt: []const u8, args: anytype) noreturn {
+fn fatal(stderr_w: *std.Io.Writer, comptime fmt: []const u8, args: anytype) noreturn {
     stderr_w.print(fmt, args) catch {};
     stderr_w.flush() catch {};
     std.process.exit(1);
 }
 
-fn exitWithError(stderr_w: *std.io.Writer, err: anyerror) noreturn {
+fn exitWithError(stderr_w: *std.Io.Writer, err: anyerror) noreturn {
     const message: []const u8 = switch (err) {
         error.InvalidBindingLine => "malformed binding in drift.lock",
         error.InvalidMetadataField => "malformed metadata field in drift.lock",

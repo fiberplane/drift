@@ -178,7 +178,7 @@ pub fn resolveSymbolWithTreeSitter(source: []const u8, lang_query: LanguageQuery
 /// Compute a fingerprint for a file or symbol, dispatching to the appropriate
 /// tree-sitter language when available and falling back to raw XxHash3.
 pub fn computeFingerprint(content: []const u8, file_path: []const u8, symbol_name: ?[]const u8) ?u64 {
-    const ext = std.fs.path.extension(file_path);
+    const ext = std.Io.Dir.path.extension(file_path);
     if (symbol_name) |sym| {
         if (std.mem.eql(u8, ext, ".md")) {
             return markdown.fingerprintHeadingSection(content, sym);

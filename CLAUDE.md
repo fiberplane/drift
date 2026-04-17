@@ -4,7 +4,7 @@
 
 ## Stack
 
-- Language: Zig 0.15.2
+- Language: Zig 0.16.0
 - C interop: tree-sitter (vendor/tree-sitter + vendor/zig-tree-sitter, parsed on demand)
 - Grammars: lazy zig build deps (not vendored)
 - CLI: zig-clap 0.11.0

@@ -13,10 +13,12 @@ pub const RunStatus = enum { pass, fail };
 pub const RunError = error{LintCheckFailed};
 
 const FileCache = struct {
+    io: std.Io,
     arena: std.heap.ArenaAllocator,
     current: std.StringHashMap([]const u8),
 
-    fn init(self: *FileCache, parent: std.mem.Allocator) void {
+    fn init(self: *FileCache, io: std.Io, parent: std.mem.Allocator) void {
+        self.io = io;
         self.arena = std.heap.ArenaAllocator.init(parent);
         self.current = std.StringHashMap([]const u8).init(self.arena.allocator());
     }
@@ -29,14 +31,15 @@ const FileCache = struct {
     fn getCurrent(self: *FileCache, absolute_path: []const u8) !?[]const u8 {
         if (self.current.get(absolute_path)) |content| return content;
 
-        const file = std.fs.openFileAbsolute(absolute_path, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.openFileAbsolute(self.io, absolute_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return null,
             else => return err,
         };
-        defer file.close();
+        defer file.close(self.io);
 
         const a = self.arena.allocator();
-        const content = try file.readToEndAlloc(a, 1024 * 1024);
+        var file_reader = file.reader(self.io, &.{});
+        const content = try file_reader.interface.allocRemaining(a, .limited(1024 * 1024));
         const key = try a.dupe(u8, absolute_path);
         try self.current.put(key, content);
         return content;
@@ -156,27 +159,27 @@ const DocGroup = struct {
 
 pub fn run(
     ctx: CommandContext,
-    stdout_w: *std.io.Writer,
-    stderr_w: *std.io.Writer,
+    stdout_w: *std.Io.Writer,
+    stderr_w: *std.Io.Writer,
     format: Format,
     changed_path: ?[]const u8,
 ) !RunStatus {
-    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
-    var doc_groups = try discoverDocGroups(ctx.run_arena, lf.root_path, lf.bindings.items);
+    var doc_groups = try discoverDocGroups(ctx.io, ctx.run_arena, lf.root_path, lf.bindings.items);
     defer {
         for (doc_groups.items) |*doc| doc.bindings.deinit(ctx.run_arena);
         doc_groups.deinit(ctx.run_arena);
     }
 
     const detected_vcs = vcs.detectVcs();
-    const repo_identity = vcs.getRepoIdentity(ctx.run_arena, ctx.scratch(), cwd_path);
+    const repo_identity = vcs.getRepoIdentity(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
 
     var file_cache: FileCache = undefined;
-    file_cache.init(ctx.run_arena);
+    file_cache.init(ctx.io, ctx.run_arena);
     defer file_cache.deinit();
 
     const normalized_changed = if (changed_path) |raw|
@@ -186,8 +189,8 @@ pub fn run(
 
     var result: CheckResult = .{
         .repo = repo_identity,
-        .checked_at_ms = std.time.milliTimestamp(),
-        .docs = .{},
+        .checked_at_ms = std.Io.Timestamp.now(ctx.io, .real).toMilliseconds(),
+        .docs = .empty,
         .failed = false,
         .docs_total = 0,
         .docs_fresh = 0,
@@ -212,8 +215,8 @@ pub fn run(
             .path = doc.path,
             .origin = commonOrigin(doc.bindings.items),
             .result = .fresh,
-            .anchors = .{},
-            .links = .{},
+            .anchors = .empty,
+            .links = .empty,
         };
 
         var fresh_count: usize = 0;
@@ -290,21 +293,21 @@ pub fn run(
 }
 
 fn discoverDocGroups(
+    io: std.Io,
     allocator: std.mem.Allocator,
     root_path: []const u8,
     bindings: []lockfile.Binding,
 ) !std.ArrayList(DocGroup) {
-    var docs: std.ArrayList(DocGroup) = .{};
+    var docs: std.ArrayList(DocGroup) = .empty;
     errdefer {
         for (docs.items) |*doc| doc.bindings.deinit(allocator);
         docs.deinit(allocator);
     }
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
+    const result = try std.process.run(allocator, io, .{
         .argv = &.{ "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard" },
-        .cwd = root_path,
-        .max_output_bytes = 10 * 1024 * 1024,
+        .cwd = .{ .path = root_path },
+        .stdout_limit = .limited(10 * 1024 * 1024),
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -312,12 +315,12 @@ fn discoverDocGroups(
     var offset: usize = 0;
     while (offset < result.stdout.len) {
         const rest = result.stdout[offset..];
-        const rel_end = std.mem.indexOfScalar(u8, rest, 0) orelse break;
+        const rel_end = std.mem.findScalar(u8, rest, 0) orelse break;
         const line = rest[0..rel_end];
         offset += rel_end + 1;
 
         if (!std.mem.endsWith(u8, line, ".md")) continue;
-        if (hasNestedLockfile(root_path, line, allocator)) continue;
+        if (hasNestedLockfile(io, root_path, line, allocator)) continue;
         _ = try ensureDocGroup(allocator, &docs, line);
     }
 
@@ -345,13 +348,13 @@ fn discoverDocGroups(
 
 /// Check if a relative path has a closer drift.lock than root_path.
 /// Returns true if there's an intermediate drift.lock (the file belongs to a nested scope).
-fn hasNestedLockfile(root_path: []const u8, rel_path: []const u8, allocator: std.mem.Allocator) bool {
-    var dir: []const u8 = std.fs.path.dirname(rel_path) orelse return false;
+fn hasNestedLockfile(io: std.Io, root_path: []const u8, rel_path: []const u8, allocator: std.mem.Allocator) bool {
+    var dir: []const u8 = std.Io.Dir.path.dirname(rel_path) orelse return false;
 
     while (dir.len > 0) {
-        const candidate = std.fs.path.join(allocator, &.{ root_path, dir, "drift.lock" }) catch return false;
-        if (pathExists(candidate)) return true;
-        dir = std.fs.path.dirname(dir) orelse break;
+        const candidate = std.Io.Dir.path.join(allocator, &.{ root_path, dir, "drift.lock" }) catch return false;
+        if (pathExists(io, candidate)) return true;
+        dir = std.Io.Dir.path.dirname(dir) orelse break;
     }
     return false;
 }
@@ -367,7 +370,7 @@ fn ensureDocGroup(
 
     try docs.append(allocator, .{
         .path = try allocator.dupe(u8, path),
-        .bindings = .{},
+        .bindings = .empty,
     });
     return &docs.items[docs.items.len - 1];
 }
@@ -389,7 +392,7 @@ fn checkDocLinks(
     file_cache: *FileCache,
     out: *std.ArrayList(JsonLinkRow),
 ) !void {
-    const absolute_doc_path = try std.fs.path.join(ctx.scratch(), &.{ root_path, doc_path });
+    const absolute_doc_path = try std.Io.Dir.path.join(ctx.scratch(), &.{ root_path, doc_path });
     const content = file_cache.getCurrent(absolute_doc_path) catch return orelse return;
 
     var parsed = (try markdown.parseDocument(ctx.run_arena, content)) orelse return;
@@ -423,19 +426,19 @@ fn classifyRelativeLink(
     const trimmed = std.mem.trim(u8, raw_target, " \t\r\n");
     if (trimmed.len == 0) return null;
     if (trimmed[0] == '#') return null;
-    if (std.fs.path.isAbsolute(trimmed)) return null;
+    if (std.Io.Dir.path.isAbsolute(trimmed)) return null;
     if (hasUriScheme(trimmed)) return null;
 
-    const path_part = if (std.mem.indexOfScalar(u8, trimmed, '#')) |idx| trimmed[0..idx] else trimmed;
+    const path_part = if (std.mem.findScalar(u8, trimmed, '#')) |idx| trimmed[0..idx] else trimmed;
     if (path_part.len == 0) return null;
 
     // Resolve symlinks on the doc path so relative links are computed from the real location.
-    const raw_absolute_doc = try std.fs.path.resolve(ctx.scratch(), &.{ root_path, doc_path });
-    const real_doc_path = std.fs.cwd().realpathAlloc(ctx.scratch(), raw_absolute_doc) catch raw_absolute_doc;
-    const doc_dir = std.fs.path.dirname(real_doc_path) orelse root_path;
-    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ doc_dir, path_part });
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
-    const exists = pathExists(absolute);
+    const raw_absolute_doc = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, doc_path });
+    const real_doc_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io, raw_absolute_doc, ctx.scratch()) catch raw_absolute_doc;
+    const doc_dir = std.Io.Dir.path.dirname(real_doc_path) orelse root_path;
+    const absolute = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ doc_dir, path_part });
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const exists = pathExists(ctx.io, absolute);
     ctx.resetScratch();
 
     return .{ .display_target = relative, .exists = exists };
@@ -455,7 +458,7 @@ fn filePathMatchesChangedPrefix(file_path: []const u8, prefix: []const u8) bool 
     if (prefix.len == 0) return true;
     if (!std.mem.startsWith(u8, file_path, prefix)) return false;
     if (file_path.len == prefix.len) return true;
-    return std.fs.path.isSep(file_path[prefix.len]);
+    return std.Io.Dir.path.isSep(file_path[prefix.len]);
 }
 
 fn docMatchesChangedPath(doc: DocGroup, changed_prefix: []const u8) bool {
@@ -473,12 +476,12 @@ fn normalizeChangedPrefix(
     cwd_path: []const u8,
     raw_path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(raw_path)) {
-        return try std.fs.path.relative(ctx.run_arena, root_path, raw_path);
+    if (std.Io.Dir.path.isAbsolute(raw_path)) {
+        return try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, raw_path);
     }
 
-    const absolute = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, raw_path });
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    const absolute = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, raw_path });
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
     return relative;
 }
@@ -493,7 +496,7 @@ fn checkBinding(
 ) !AnchorOutcome {
     const sig_hex = binding.fieldValue("sig") orelse return .{ .result = .stale, .reason_code = .baseline_unavailable };
 
-    const absolute_path = try std.fs.path.join(ctx.scratch(), &.{ root_path, parsed.file_path });
+    const absolute_path = try std.Io.Dir.path.join(ctx.scratch(), &.{ root_path, parsed.file_path });
     const current_content = file_cache.getCurrent(absolute_path) catch {
         return .{ .result = .stale, .reason_code = .file_not_readable };
     } orelse {
@@ -506,7 +509,7 @@ fn checkBinding(
                 return .{ .result = .stale, .reason_code = .symbol_not_found };
             }
         } else {
-            const ext = std.fs.path.extension(parsed.file_path);
+            const ext = std.Io.Dir.path.extension(parsed.file_path);
             if (symbols.languageForExtension(ext)) |lang_query| {
                 if (!symbols.resolveSymbolWithTreeSitter(current_content, lang_query, sym)) {
                     return .{ .result = .stale, .reason_code = .symbol_not_found };
@@ -525,7 +528,7 @@ fn checkBinding(
         return .{ .result = .fresh, .reason_code = .none };
     }
 
-    const blame = try vcs.getLatestBlameInfo(ctx.run_arena, ctx.scratch(), root_path, parsed.file_path, detected_vcs);
+    const blame = try vcs.getLatestBlameInfo(ctx.io, ctx.run_arena, ctx.scratch(), root_path, parsed.file_path, detected_vcs);
     return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
 }
 
@@ -564,7 +567,7 @@ fn jsonAnchorFromOutcome(raw_target: []const u8, sig: ?[]const u8, parsed: targe
     };
 }
 
-fn writeResultsText(w: *std.io.Writer, result: *const CheckResult, checked_any: bool) !void {
+fn writeResultsText(w: *std.Io.Writer, result: *const CheckResult, checked_any: bool) !void {
     if (!checked_any) {
         try w.writeAll("ok\n");
         return;
@@ -596,7 +599,7 @@ fn writeResultsText(w: *std.io.Writer, result: *const CheckResult, checked_any: 
     }
 }
 
-fn textEmitAnchor(w: *std.io.Writer, origin: ?[]const u8, row: drift_check_v1.Anchor, blame_storage: ?vcs.BlameInfo) void {
+fn textEmitAnchor(w: *std.Io.Writer, origin: ?[]const u8, row: drift_check_v1.Anchor, blame_storage: ?vcs.BlameInfo) void {
     if (std.mem.eql(u8, row.result, "stale")) {
         const msg = row.reason.?.message;
         if (msg.len > 0) {
@@ -620,12 +623,12 @@ fn textEmitAnchor(w: *std.io.Writer, origin: ?[]const u8, row: drift_check_v1.An
     }
 }
 
-fn textEmitLink(w: *std.io.Writer, display_target: []const u8, row: drift_check_v1.Link) void {
+fn textEmitLink(w: *std.Io.Writer, display_target: []const u8, row: drift_check_v1.Link) void {
     if (!std.mem.eql(u8, row.result, "broken")) return;
     w.print("  BROKEN  {s} ({s})\n", .{ display_target, row.reason.?.message }) catch {};
 }
 
-fn writeSummaryText(w: *std.io.Writer, result: *const CheckResult) !void {
+fn writeSummaryText(w: *std.Io.Writer, result: *const CheckResult) !void {
     var wrote_any = false;
 
     if (result.docs_stale > 0) {
@@ -643,7 +646,7 @@ fn writeSummaryText(w: *std.io.Writer, result: *const CheckResult) !void {
     }
 }
 
-fn writeResultsJson(run_alloc: std.mem.Allocator, w: *std.io.Writer, result: *const CheckResult) !void {
+fn writeResultsJson(run_alloc: std.mem.Allocator, w: *std.Io.Writer, result: *const CheckResult) !void {
     const doc = try checkResultToDriftCheckV1(run_alloc, result);
     try drift_check_v1.writeJson(w, doc);
 }
@@ -696,7 +699,7 @@ fn checkResultSummaryWire(result: *const CheckResult) drift_check_v1.Summary {
     };
 }
 
-fn pathExists(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+fn pathExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
 }

@@ -3,12 +3,12 @@ const CommandContext = @import("../context.zig").CommandContext;
 const lockfile = @import("../lockfile.zig");
 const target = @import("../target.zig");
 
-pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, raw_target: []const u8) !void {
+pub fn run(ctx: CommandContext, stdout_w: *std.Io.Writer, stderr_w: *std.Io.Writer, raw_target: []const u8) !void {
     _ = stderr_w;
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    const lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), cwd_path);
+    const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
     if (!lf.exists) return;
@@ -38,7 +38,7 @@ fn normalizeTargetPath(
     const symbol_name = parsed.symbol_name;
 
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
 
     if (symbol_name) |symbol| {
@@ -53,17 +53,17 @@ fn resolveInputPath(
     cwd_path: []const u8,
     path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try ctx.scratch().dupe(u8, path);
     }
 
-    const cwd_candidate = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, path });
-    if (pathExists(cwd_candidate)) return cwd_candidate;
+    const cwd_candidate = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, path });
+    if (pathExists(ctx.io, cwd_candidate)) return cwd_candidate;
 
-    return try std.fs.path.resolve(ctx.scratch(), &.{ root_path, path });
+    return try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, path });
 }
 
-fn pathExists(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+fn pathExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
 }

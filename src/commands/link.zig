@@ -11,20 +11,20 @@ pub const RunError = error{ DocReadFailed, NoBindingsForDoc, CannotComputeFinger
 
 pub fn run(
     ctx: CommandContext,
-    stdout_w: *std.io.Writer,
-    stderr_w: *std.io.Writer,
+    stdout_w: *std.Io.Writer,
+    stderr_w: *std.Io.Writer,
     doc_path: []const u8,
     optional_anchor: ?[]const u8,
     doc_is_still_accurate: bool,
 ) !void {
-    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    const abs_doc_path = try std.fs.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
-    const doc_dir = std.fs.path.dirname(abs_doc_path) orelse cwd_path;
-    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), doc_dir);
+    const abs_doc_path = try std.Io.Dir.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
+    const doc_dir = std.Io.Dir.path.dirname(abs_doc_path) orelse cwd_path;
+    var lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
-    const doc_content = std.fs.cwd().readFileAlloc(ctx.run_arena, doc_path, 1024 * 1024) catch |err| {
+    const doc_content = std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
         stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
         return error.DocReadFailed;
     };
@@ -54,11 +54,11 @@ pub fn run(
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
         if (isDocGateBlocked(binding, old_sig, doc_is_still_accurate)) {
             printStaleContext(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, binding.target);
-            if (!promptDocAccurate(stderr_w)) return error.DocUnchanged;
+            if (!promptDocAccurate(ctx.io, stderr_w)) return error.DocUnchanged;
         }
         binding.removeField("doc");
 
-        try lockfile.writeFile(&lf, ctx.scratch());
+        try lockfile.writeFile(ctx.io, &lf, ctx.scratch());
 
         stdout_w.print("added {s} -> {s}", .{ normalized_doc_path, binding.target }) catch {};
         if (binding.fieldValue("sig")) |sig| {
@@ -90,27 +90,28 @@ pub fn run(
 
     if (refused_count > 0) {
         printBlanketRefusal(ctx, stderr_w, lf.root_path, cwd_path, doc_path, doc_content, lf.bindings.items, normalized_doc_path, refused_count);
-        if (!promptDocAccurate(stderr_w)) return error.DocUnchanged;
+        if (!promptDocAccurate(ctx.io, stderr_w)) return error.DocUnchanged;
     }
 
-    try lockfile.writeFile(&lf, ctx.scratch());
+    try lockfile.writeFile(ctx.io, &lf, ctx.scratch());
     stdout_w.print("relinked all anchors in {s}\n", .{normalized_doc_path}) catch {};
 }
 
 /// In TTY mode, prompt the user to confirm the doc is still accurate.
 /// In non-TTY mode, print the refusal message and return false.
-fn promptDocAccurate(stderr_w: *std.io.Writer) bool {
-    const stdin = std.fs.File.stdin();
-    if (!stdin.isTty()) {
+fn promptDocAccurate(io: std.Io, stderr_w: *std.Io.Writer) bool {
+    const stdin = std.Io.File.stdin();
+    const is_tty = stdin.isTty(io) catch false;
+    if (!is_tty) {
         stderr_w.print("refused: target changed since last link.\nReview the doc, then relink with --doc-is-still-accurate.\n", .{}) catch {};
         return false;
     }
     stderr_w.print("Doc is still accurate? [y/N] ", .{}) catch {};
     stderr_w.flush() catch {};
     var buf: [16]u8 = undefined;
-    const n = stdin.read(&buf) catch return false;
-    if (n == 0) return false;
-    const answer = std.mem.trimRight(u8, buf[0..n], "\r\n \t");
+    var stdin_reader = stdin.readerStreaming(io, &buf);
+    const slice = stdin_reader.interface.takeDelimiterExclusive('\n') catch return false;
+    const answer = std.mem.trimEnd(u8, slice, "\r\n \t");
     return answer.len > 0 and (answer[0] == 'y' or answer[0] == 'Y');
 }
 
@@ -130,7 +131,7 @@ fn isDocGateBlocked(
 /// each refused binding with its target context.
 fn printBlanketRefusal(
     ctx: CommandContext,
-    stderr_w: *std.io.Writer,
+    stderr_w: *std.Io.Writer,
     root_path: []const u8,
     cwd_path: []const u8,
     doc_path: []const u8,
@@ -184,7 +185,7 @@ fn upsertBinding(
     var binding = lockfile.Binding{
         .doc_path = try ctx.run_arena.dupe(u8, normalized_doc_path),
         .target = try ctx.run_arena.dupe(u8, normalized_target),
-        .metadata = .{},
+        .metadata = .empty,
     };
     try refreshBindingSig(ctx, cwd_path, lf.root_path, &binding);
     try lf.bindings.append(ctx.run_arena, binding);
@@ -225,7 +226,7 @@ fn normalizeDocPath(
     doc_path: []const u8,
 ) ![]const u8 {
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
     return relative;
 }
@@ -238,12 +239,12 @@ fn normalizeTargetPath(
 ) ![]const u8 {
     const parsed = target.parse(raw_target);
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, parsed.file_path);
-    if (!pathExists(absolute)) {
+    if (!pathExists(ctx.io, absolute)) {
         ctx.resetScratch();
         return error.TargetNotFound;
     }
 
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
 
     if (parsed.symbol_name) |symbol| {
         if (parsed.isHeading()) {
@@ -273,28 +274,29 @@ fn resolveInputPath(
     cwd_path: []const u8,
     path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try ctx.scratch().dupe(u8, path);
     }
 
-    const cwd_candidate = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, path });
-    if (pathExists(cwd_candidate)) return cwd_candidate;
+    const cwd_candidate = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, path });
+    if (pathExists(ctx.io, cwd_candidate)) return cwd_candidate;
 
-    return try std.fs.path.resolve(ctx.scratch(), &.{ root_path, path });
+    return try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, path });
 }
 
-fn pathExists(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+fn pathExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
 }
 
 fn readResolvedFile(ctx: CommandContext, path: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
-        const file = try std.fs.openFileAbsolute(path, .{});
-        defer file.close();
-        return try file.readToEndAlloc(ctx.scratch(), 1024 * 1024);
-    }
-    return try std.fs.cwd().readFileAlloc(ctx.scratch(), path, 1024 * 1024);
+    const file = if (std.Io.Dir.path.isAbsolute(path))
+        try std.Io.Dir.openFileAbsolute(ctx.io, path, .{})
+    else
+        try std.Io.Dir.cwd().openFile(ctx.io, path, .{});
+    defer file.close(ctx.io);
+    var file_reader = file.reader(ctx.io, &.{});
+    return try file_reader.interface.allocRemaining(ctx.scratch(), .limited(1024 * 1024));
 }
 
 fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, normalized_target: []const u8) ?*lockfile.Binding {
@@ -311,7 +313,7 @@ fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, normalized_ta
 /// silently ignored so the refusal message always follows.
 fn printStaleContext(
     ctx: CommandContext,
-    stderr_w: *std.io.Writer,
+    stderr_w: *std.Io.Writer,
     root_path: []const u8,
     cwd_path: []const u8,
     doc_path: []const u8,
@@ -337,7 +339,7 @@ fn printStaleContext(
 }
 
 fn printDocSection(
-    stderr_w: *std.io.Writer,
+    stderr_w: *std.Io.Writer,
     doc_path: []const u8,
     doc_content: []const u8,
     binding_target: []const u8,
@@ -375,7 +377,7 @@ fn findDocSectionForTarget(
 
     while (lines.next()) |line| {
         for (search_terms) |term| {
-            if (term.len > 0 and std.mem.indexOf(u8, line, term) != null) {
+            if (term.len > 0 and std.mem.find(u8, line, term) != null) {
                 match_offset = line_start;
                 break;
             }
@@ -402,7 +404,7 @@ fn extractSectionAroundOffset(content: []const u8, offset: usize) []const u8 {
     var line_iter = std.mem.splitScalar(u8, content, '\n');
 
     while (line_iter.next()) |line| {
-        const trimmed = std.mem.trimLeft(u8, line, " \t");
+        const trimmed = std.mem.trimStart(u8, line, " \t");
         if (trimmed.len > 0 and trimmed[0] == '#') {
             const level = countLeadingChar(trimmed, '#');
             if (level > 0 and level <= 6 and pos <= offset) {
@@ -429,7 +431,7 @@ fn extractSectionAroundOffset(content: []const u8, offset: usize) []const u8 {
 
     while (iter2.next()) |line| {
         if (past_heading) {
-            const trimmed = std.mem.trimLeft(u8, line, " \t");
+            const trimmed = std.mem.trimStart(u8, line, " \t");
             if (trimmed.len > 0 and trimmed[0] == '#') {
                 const level = countLeadingChar(trimmed, '#');
                 if (level > 0 and level <= heading_level) {
@@ -444,7 +446,7 @@ fn extractSectionAroundOffset(content: []const u8, offset: usize) []const u8 {
     }
 
     const section = content[heading_start..@min(section_end, content.len)];
-    return std.mem.trimRight(u8, section, "\n\r ");
+    return std.mem.trimEnd(u8, section, "\n\r ");
 }
 
 fn countLeadingChar(s: []const u8, c: u8) usize {
@@ -467,7 +469,7 @@ fn findNearestHeadingAbove(doc_content: []const u8, section_text: []const u8) ?[
     var last_heading: ?[]const u8 = null;
     var lines = std.mem.splitScalar(u8, prefix, '\n');
     while (lines.next()) |line| {
-        const trimmed = std.mem.trimLeft(u8, line, " \t");
+        const trimmed = std.mem.trimStart(u8, line, " \t");
         if (trimmed.len > 0 and trimmed[0] == '#') {
             const hashes = countLeadingChar(trimmed, '#');
             if (hashes > 0 and hashes <= 6 and trimmed.len > hashes) {
@@ -477,8 +479,8 @@ fn findNearestHeadingAbove(doc_content: []const u8, section_text: []const u8) ?[
     }
 
     // Also check if section_text itself starts with a heading
-    const first_line_end = std.mem.indexOfScalar(u8, section_text, '\n') orelse section_text.len;
-    const first_line = std.mem.trimLeft(u8, section_text[0..first_line_end], " \t");
+    const first_line_end = std.mem.findScalar(u8, section_text, '\n') orelse section_text.len;
+    const first_line = std.mem.trimStart(u8, section_text[0..first_line_end], " \t");
     if (first_line.len > 0 and first_line[0] == '#') {
         const hashes = countLeadingChar(first_line, '#');
         if (hashes > 0 and hashes <= 6 and first_line.len > hashes) {
@@ -491,7 +493,7 @@ fn findNearestHeadingAbove(doc_content: []const u8, section_text: []const u8) ?[
 
 fn printHeadingTarget(
     ctx: CommandContext,
-    stderr_w: *std.io.Writer,
+    stderr_w: *std.Io.Writer,
     root_path: []const u8,
     cwd_path: []const u8,
     parsed: target.ParsedTarget,
@@ -511,7 +513,7 @@ fn printHeadingTarget(
 
 fn printSymbolTarget(
     ctx: CommandContext,
-    stderr_w: *std.io.Writer,
+    stderr_w: *std.Io.Writer,
     root_path: []const u8,
     cwd_path: []const u8,
     parsed: target.ParsedTarget,
@@ -521,7 +523,7 @@ fn printSymbolTarget(
     defer ctx.resetScratch();
 
     const symbol = parsed.symbol_name orelse return;
-    const ext = std.fs.path.extension(parsed.file_path);
+    const ext = std.Io.Dir.path.extension(parsed.file_path);
     const lang_query = symbols.languageForExtension(ext) orelse return;
     const range = symbols.extractSymbolContent(content, lang_query, symbol) orelse return;
     const source = content[range[0]..range[1]];
@@ -531,7 +533,7 @@ fn printSymbolTarget(
     printCappedLines(stderr_w, source);
 }
 
-fn printCappedLines(stderr_w: *std.io.Writer, text: []const u8) void {
+fn printCappedLines(stderr_w: *std.Io.Writer, text: []const u8) void {
     var lines = std.mem.splitScalar(u8, text, '\n');
     var printed: usize = 0;
 

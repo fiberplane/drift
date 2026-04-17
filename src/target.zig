@@ -6,7 +6,7 @@ pub const ParsedTarget = struct {
     symbol_name: ?[]const u8,
 
     pub fn isHeading(self: ParsedTarget) bool {
-        return self.symbol_name != null and std.mem.eql(u8, std.fs.path.extension(self.file_path), ".md");
+        return self.symbol_name != null and std.mem.eql(u8, std.Io.Dir.path.extension(self.file_path), ".md");
     }
 
     pub fn kind(self: ParsedTarget) []const u8 {
@@ -17,7 +17,7 @@ pub const ParsedTarget = struct {
 };
 
 pub fn parse(raw_target: []const u8) ParsedTarget {
-    const hash_pos = std.mem.indexOfScalar(u8, raw_target, '#');
+    const hash_pos = std.mem.findScalar(u8, raw_target, '#');
     return .{
         .identity = raw_target,
         .file_path = if (hash_pos) |pos| raw_target[0..pos] else raw_target,

@@ -3,6 +3,7 @@ const std = @import("std");
 /// Per-command memory scope: `run` owns command-lifetime data; `scratch` holds
 /// loop-local temporaries and is reset between iterations (see docs/DECISIONS.md).
 pub const CommandContext = struct {
+    io: std.Io,
     run_arena: std.mem.Allocator,
     scratch_arena: *std.heap.ArenaAllocator,
 

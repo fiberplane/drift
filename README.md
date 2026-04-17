@@ -158,10 +158,10 @@ For faster CI runs, use `--changed` to scope checking to docs affected by the fi
 
 ## Development
 
-Requires Zig 0.15.2. The repo includes a `.tool-versions` file for [mise](https://mise.jdx.dev/) (or asdf). If you haven't already, [activate mise](https://mise.jdx.dev/getting-started.html#activate-mise) in your shell, then:
+Requires Zig 0.16.0. The repo includes a `.mise.toml` file for [mise](https://mise.jdx.dev/). If you haven't already, [activate mise](https://mise.jdx.dev/getting-started.html#activate-mise) in your shell, then:
 
 ```bash
-mise install        # installs zig 0.15.2
+mise install        # installs zig 0.16.0
 zig build test      # run tests
 zig build -Doptimize=ReleaseSafe  # build release binary
 ```

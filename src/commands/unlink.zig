@@ -3,14 +3,14 @@ const CommandContext = @import("../context.zig").CommandContext;
 const lockfile = @import("../lockfile.zig");
 const target = @import("../target.zig");
 
-pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writer, doc_path: []const u8, anchor: []const u8) !void {
+pub fn run(ctx: CommandContext, stdout_w: *std.Io.Writer, stderr_w: *std.Io.Writer, doc_path: []const u8, anchor: []const u8) !void {
     _ = stderr_w;
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(ctx.run_arena, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    const abs_doc_path = try std.fs.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
-    const doc_dir = std.fs.path.dirname(abs_doc_path) orelse cwd_path;
-    var lf = try lockfile.discover(ctx.run_arena, ctx.scratch(), doc_dir);
+    const abs_doc_path = try std.Io.Dir.path.resolve(ctx.run_arena, &.{ cwd_path, doc_path });
+    const doc_dir = std.Io.Dir.path.dirname(abs_doc_path) orelse cwd_path;
+    var lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
     if (!lf.exists) return;
@@ -37,7 +37,7 @@ pub fn run(ctx: CommandContext, stdout_w: *std.io.Writer, stderr_w: *std.io.Writ
 
     if (!removed) return;
 
-    try lockfile.writeFile(&lf, ctx.scratch());
+    try lockfile.writeFile(ctx.io, &lf, ctx.scratch());
     stdout_w.print("removed {s} -> {s} from drift.lock\n", .{ normalized_doc_path, normalized_target }) catch {};
 }
 
@@ -48,7 +48,7 @@ fn normalizeSpecPath(
     doc_path: []const u8,
 ) ![]const u8 {
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
     return relative;
 }
@@ -64,7 +64,7 @@ fn normalizeTargetPath(
     const symbol_name = parsed.symbol_name;
 
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
-    const relative = try std.fs.path.relative(ctx.run_arena, root_path, absolute);
+    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
     ctx.resetScratch();
 
     if (symbol_name) |symbol| {
@@ -79,17 +79,17 @@ fn resolveInputPath(
     cwd_path: []const u8,
     path: []const u8,
 ) ![]const u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try ctx.scratch().dupe(u8, path);
     }
 
-    const cwd_candidate = try std.fs.path.resolve(ctx.scratch(), &.{ cwd_path, path });
-    if (pathExists(cwd_candidate)) return cwd_candidate;
+    const cwd_candidate = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, path });
+    if (pathExists(ctx.io, cwd_candidate)) return cwd_candidate;
 
-    return try std.fs.path.resolve(ctx.scratch(), &.{ root_path, path });
+    return try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, path });
 }
 
-fn pathExists(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+fn pathExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
 }

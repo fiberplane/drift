@@ -73,7 +73,7 @@ pub const Blame = struct {
     subject: []const u8,
 };
 
-pub fn writeJson(w: *std.io.Writer, doc: DriftCheckV1) !void {
+pub fn writeJson(w: *std.Io.Writer, doc: DriftCheckV1) !void {
     try std.json.Stringify.value(doc, .{ .whitespace = .indent_2 }, w);
     try w.writeByte('\n');
 }

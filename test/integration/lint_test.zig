@@ -383,7 +383,7 @@ test "check --format json reports stale anchors with blame" {
     const blame = parsed.value.docs[0].anchors[0].blame orelse return error.MissingBlame;
     try std.testing.expect(blame.author.len > 0);
     try std.testing.expect(blame.commit.len >= 40);
-    try std.testing.expect(std.mem.indexOfScalar(u8, blame.date, 'T') != null);
+    try std.testing.expect(std.mem.findScalar(u8, blame.date, 'T') != null);
     try helpers.expectContains(blame.subject, "refactor: tweak main return value");
 }
 
