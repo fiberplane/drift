@@ -173,6 +173,12 @@ pub fn run(
     const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
+    // Kick off the `git remote get-url origin` query concurrently with the
+    // `git ls-files` run inside `discoverDocGroups`. Both are independent and
+    // both shell out to git, so the two subprocesses overlap.
+    var identity_future = ctx.io.async(vcs.getRepoIdentity, .{ ctx.io, ctx.run_arena, ctx.run_arena, cwd_path });
+    defer _ = identity_future.cancel(ctx.io);
+
     var doc_groups = try discoverDocGroups(ctx.io, ctx.run_arena, lf.root_path, lf.bindings.items);
     defer {
         for (doc_groups.items) |*doc| doc.bindings.deinit(ctx.run_arena);
@@ -180,7 +186,7 @@ pub fn run(
     }
 
     const detected_vcs = vcs.detectVcs();
-    const repo_identity = vcs.getRepoIdentity(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
+    const repo_identity = identity_future.await(ctx.io);
 
     const normalized_changed = if (changed_path) |raw|
         try normalizeChangedPrefix(ctx, lf.root_path, cwd_path, raw)
@@ -314,6 +320,8 @@ fn checkOneDocInner(
     var stale_count: usize = 0;
     var skip_count: usize = 0;
 
+    // Phase 1: determine staleness per binding. CPU-bound (tree-sitter parse +
+    // fingerprint). `checkBinding` no longer fetches blame — that's phase 2.
     for (doc.bindings.items) |binding| {
         task_ctx.resetScratch();
         const parsed = target.parse(binding.target);
@@ -324,7 +332,7 @@ fn checkOneDocInner(
                 const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
                 if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
             }
-            break :blk checkBinding(task_ctx, root_path, binding, parsed, &file_cache, detected_vcs) catch |err| {
+            break :blk checkBinding(task_ctx, root_path, binding, parsed, &file_cache) catch |err| {
                 const msg = try std.fmt.allocPrint(run_arena, "error checking {s}: {s}\n", .{ binding.target, @errorName(err) });
                 doc_result.error_message = msg;
                 out.* = doc_result;
@@ -337,6 +345,47 @@ fn checkOneDocInner(
             .fresh => fresh_count += 1,
             .stale => stale_count += 1,
             .skip => skip_count += 1,
+        }
+    }
+
+    // Phase 2: fetch blame in parallel for every `changed_after_baseline` stale
+    // anchor. Each call shells out to `git log`; running them concurrently cuts
+    // doc check time on docs with multiple stale anchors from N× to ~1×.
+    // Previously these were serialized inside `checkBinding`.
+    const BlameReturn = @typeInfo(@TypeOf(vcs.getLatestBlameInfo)).@"fn".return_type.?;
+    const BlameJob = struct {
+        row_index: usize,
+        future: std.Io.Future(BlameReturn),
+    };
+    var blame_jobs: std.ArrayList(BlameJob) = .empty;
+    defer blame_jobs.deinit(run_arena);
+
+    for (doc_result.anchors.items, 0..) |row, i| {
+        if (!std.mem.eql(u8, row.wire.result, "stale")) continue;
+        const reason = row.wire.reason orelse continue;
+        if (!std.mem.eql(u8, reason.code, @tagName(ReasonCode.changed_after_baseline))) continue;
+
+        const future = io.async(vcs.getLatestBlameInfo, .{
+            io, run_arena, run_arena, root_path, row.wire.path, detected_vcs,
+        });
+        blame_jobs.append(run_arena, .{ .row_index = i, .future = future }) catch {
+            // If we can't record the future, at least drain it so it doesn't leak.
+            var drop = future;
+            _ = drop.cancel(io) catch null;
+            continue;
+        };
+    }
+    for (blame_jobs.items) |*job| {
+        const blame = (job.future.await(io)) catch null;
+        if (blame) |b| {
+            const row = &doc_result.anchors.items[job.row_index];
+            row.blame_storage = b;
+            row.wire.blame = .{
+                .author = b.author,
+                .commit = b.commit_hash,
+                .date = b.date,
+                .subject = b.subject,
+            };
         }
     }
 
@@ -501,50 +550,65 @@ fn checkDocLinks(
     var parsed = (try markdown.parseDocument(ctx.run_arena, content)) orelse return;
     defer parsed.deinit();
 
-    for (parsed.links.items) |link| {
-        const checked = try classifyRelativeLink(ctx, root_path, doc_path, link.target) orelse continue;
-        try out.append(ctx.run_arena, .{
-            .display_target = checked.display_target,
-            .wire = .{
-                .target = link.target,
-                .line = link.line,
-                .result = linkResultStr(if (checked.exists) .ok else .broken),
-                .reason = if (checked.exists) null else driftReason(.link_target_not_found),
-            },
+    if (parsed.links.items.len == 0) return;
+
+    // Resolve the doc's real path once; every link check needs the same dir.
+    const raw_absolute_doc = try std.Io.Dir.path.resolve(ctx.run_arena, &.{ root_path, doc_path });
+    const real_doc_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io, raw_absolute_doc, ctx.run_arena) catch raw_absolute_doc;
+    const doc_dir = std.Io.Dir.path.dirname(real_doc_path) orelse root_path;
+
+    // Parallelize link-existence checks. Each task is a `statFile` syscall
+    // wrapped in `pathExists`. On docs with many cross-doc links this
+    // collapses N sequential stats into a single pool round-trip.
+    const slots = try ctx.run_arena.alloc(?JsonLinkRow, parsed.links.items.len);
+    @memset(slots, null);
+
+    var group: std.Io.Group = .init;
+    defer group.cancel(ctx.io);
+
+    for (parsed.links.items, slots) |link, *slot| {
+        group.async(ctx.io, classifyLinkTask, .{
+            ctx.io, ctx.run_arena, root_path, doc_dir, link, slot,
         });
+    }
+    try group.await(ctx.io);
+
+    for (slots) |maybe_row| {
+        const row = maybe_row orelse continue;
+        try out.append(ctx.run_arena, row);
     }
 }
 
-const CheckedLink = struct {
-    display_target: []const u8,
-    exists: bool,
-};
-
-fn classifyRelativeLink(
-    ctx: CommandContext,
+fn classifyLinkTask(
+    io: std.Io,
+    run_arena: std.mem.Allocator,
     root_path: []const u8,
-    doc_path: []const u8,
-    raw_target: []const u8,
-) !?CheckedLink {
-    const trimmed = std.mem.trim(u8, raw_target, " \t\r\n");
-    if (trimmed.len == 0) return null;
-    if (trimmed[0] == '#') return null;
-    if (std.Io.Dir.path.isAbsolute(trimmed)) return null;
-    if (hasUriScheme(trimmed)) return null;
+    doc_dir: []const u8,
+    link: markdown.Link,
+    slot: *?JsonLinkRow,
+) void {
+    const trimmed = std.mem.trim(u8, link.target, " \t\r\n");
+    if (trimmed.len == 0) return;
+    if (trimmed[0] == '#') return;
+    if (std.Io.Dir.path.isAbsolute(trimmed)) return;
+    if (hasUriScheme(trimmed)) return;
 
     const path_part = if (std.mem.findScalar(u8, trimmed, '#')) |idx| trimmed[0..idx] else trimmed;
-    if (path_part.len == 0) return null;
+    if (path_part.len == 0) return;
 
-    // Resolve symlinks on the doc path so relative links are computed from the real location.
-    const raw_absolute_doc = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ root_path, doc_path });
-    const real_doc_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io, raw_absolute_doc, ctx.scratch()) catch raw_absolute_doc;
-    const doc_dir = std.Io.Dir.path.dirname(real_doc_path) orelse root_path;
-    const absolute = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ doc_dir, path_part });
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
-    const exists = pathExists(ctx.io, absolute);
-    ctx.resetScratch();
+    const absolute = std.Io.Dir.path.resolve(run_arena, &.{ doc_dir, path_part }) catch return;
+    const relative = std.Io.Dir.path.relative(run_arena, "", null, root_path, absolute) catch return;
+    const exists = pathExists(io, absolute);
 
-    return .{ .display_target = relative, .exists = exists };
+    slot.* = .{
+        .display_target = relative,
+        .wire = .{
+            .target = link.target,
+            .line = link.line,
+            .result = linkResultStr(if (exists) .ok else .broken),
+            .reason = if (exists) null else driftReason(.link_target_not_found),
+        },
+    };
 }
 
 fn hasUriScheme(target_text: []const u8) bool {
@@ -595,7 +659,6 @@ fn checkBinding(
     binding: *const lockfile.Binding,
     parsed: target.ParsedTarget,
     file_cache: *FileCache,
-    detected_vcs: vcs.VcsKind,
 ) !AnchorOutcome {
     const sig_hex = binding.fieldValue("sig") orelse return .{ .result = .stale, .reason_code = .baseline_unavailable };
 
@@ -631,8 +694,10 @@ fn checkBinding(
         return .{ .result = .fresh, .reason_code = .none };
     }
 
-    const blame = try vcs.getLatestBlameInfo(ctx.io, ctx.run_arena, ctx.scratch(), root_path, parsed.file_path, detected_vcs);
-    return .{ .result = .stale, .reason_code = .changed_after_baseline, .blame = blame };
+    // Blame lookup happens in a second parallel phase in `checkOneDocInner`.
+    // Leaving it unset here so multiple stale anchors in the same doc don't
+    // serialize on one-at-a-time `git log` invocations.
+    return .{ .result = .stale, .reason_code = .changed_after_baseline };
 }
 
 fn driftProvenance(sig: ?[]const u8) ?drift_check_v1.Provenance {
