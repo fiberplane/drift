@@ -76,7 +76,7 @@ jobs:
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Build
         run: zig build -Doptimize=ReleaseSafe -Dversion=${{ github.ref_name }} -Dtarget=${{ matrix.zig-target }} ${{ matrix.zig-cpu && format('-Dcpu={0}', matrix.zig-cpu) || '' }}

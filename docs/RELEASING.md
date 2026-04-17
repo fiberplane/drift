@@ -7,7 +7,7 @@ Source of truth: `.github/workflows/release.yml`, `.github/workflows/ci.yml`, `c
 
 Every push to `main` and every pull request runs the CI workflow (`.github/workflows/ci.yml`).
 
-The **lint** job: install Zig 0.15.2, build the project, run the full test suite (`zig build test -Doptimize=ReleaseSafe`), regenerate `docs/schemas/drift.check.v1.json` from the payload types and fail if that file differs from what is committed (`zig build gen-check-schema` plus `git diff --exit-code`), then run `./zig-out/bin/drift lint` so the repo’s own drift docs stay current. If any step fails, the job fails.
+The **lint** job: install Zig 0.16.0, build the project, run the full test suite (`zig build test -Doptimize=ReleaseSafe`), regenerate `docs/schemas/drift.check.v1.json` from the payload types and fail if that file differs from what is committed (`zig build gen-check-schema` plus `git diff --exit-code`), then run `./zig-out/bin/drift lint` so the repo’s own drift docs stay current. If any step fails, the job fails.
 
 The **build** job runs after **lint** and cross-compiles release binaries for all four targets (aarch64-macos, x86_64-macos, x86_64-linux, aarch64-linux), packaging each as a tarball artifact.
 
@@ -38,7 +38,7 @@ Types `chore`, `style`, and `ci` are excluded from changelogs. Merge commits are
    ```
 3. The tag push triggers `.github/workflows/release.yml`, which first verifies the tag points to a commit on `main` (tags on feature branches are rejected), then:
    - Generates release notes with git-cliff (grouped by Features, Bug Fixes, Documentation, Refactor)
-   - Cross-compiles for all 4 targets with Zig 0.15.2
+   - Cross-compiles for all 4 targets with Zig 0.16.0
    - Creates a GitHub release with the generated notes, all tarballs, and matching `.sha256` checksum files attached
    - Optionally dispatches `fiberplane/homebrew-tap` to open or refresh the Homebrew formula PR for that tag
 
