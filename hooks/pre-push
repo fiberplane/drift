@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# git sets GIT_DIR when invoking hooks; unset it so integration tests that
+# spawn `git` inside temp repos don't accidentally operate on this repo's .git.
+unset GIT_DIR
+
 echo "pre-push: building drift..."
 zig build -Doptimize=ReleaseSafe
 
