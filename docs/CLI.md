@@ -7,12 +7,14 @@
 Check all docs for staleness. The primary command. Exits 1 if any anchor is stale or any link is broken. `drift lint` is an alias. Markdown files under directories with their own `drift.lock` are skipped — they belong to a nested scope.
 
 ```
-drift check [--format text|json] [--changed <path>]
+drift check [--format text|json] [--changed <path>] [--silent]
 ```
 
 Reads bindings from `drift.lock`, recomputes content signatures for each target, and compares against the stored `sig:` values. Reports stale anchors with reasons.
 
 The `--changed <path>` flag scopes checking to docs whose targets match the given path prefix. This enables efficient CI integration — a pipeline that knows which files changed can check only the affected docs without running a full lint.
+
+The `--silent` flag suppresses the report on passing runs (exit 0, no output). When the run fails it still exits 1, and the same report (text or JSON, honoring `--format`) is written to **stderr** so the failure is observable in terminals and CI logs. Redirect stderr with `2>/dev/null` to silence the failure output as well; the exit code is unchanged.
 
 The JSON output emits the `drift.check.v1` schema with summary counts, per-doc results, per-anchor reason codes, and (best-effort) git blame on stale anchors. The exit code is the same as the text path: 0 on pass, 1 on stale. Errors writing the JSON payload (broken pipe, encoder failure) exit non-zero rather than emitting a truncated document. See [`check-json-schema.md`](./check-json-schema.md) for the full schema.
 
