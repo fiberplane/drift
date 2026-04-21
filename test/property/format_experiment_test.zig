@@ -427,6 +427,131 @@ fn serializeV3SectionedMultiline(alloc: std.mem.Allocator, bindings: []const loc
     return try out.toOwnedSlice();
 }
 
+/// V4: TOML array-of-tables. `[[bindings]]` header is a highly distinctive
+/// anchor (unlike blank lines); blocks separated by a single blank line per
+/// TOML convention, so the anchor line is doing the alignment work, not padding.
+fn serializeV4TomlTables(alloc: std.mem.Allocator, bindings: []const lockfile.Binding) ![]u8 {
+    const sorted = try alloc.dupe(lockfile.Binding, bindings);
+    defer alloc.free(sorted);
+    std.mem.sort(lockfile.Binding, sorted, {}, compareBindings);
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
+    for (sorted, 0..) |b, i| {
+        if (i > 0) try w.writeAll("\n");
+        try w.writeAll("[[bindings]]\n");
+        try w.print("doc = \"{s}\"\n", .{b.doc_path});
+        try w.print("target = \"{s}\"\n", .{b.target});
+        const fields = try sortedMetadataCopy(alloc, b.metadata.items);
+        defer alloc.free(fields);
+        for (fields) |f| try w.print("{s} = \"{s}\"\n", .{ f.key, f.value });
+    }
+    return try out.toOwnedSlice();
+}
+
+/// V5: YAML-ish doc-keyed nested map. Indentation implies grouping, no repeated
+/// doc_path on every line, no explicit separators. Tests whether structural
+/// hierarchy alone produces enough context for git's merge.
+fn serializeV5YamlNested(alloc: std.mem.Allocator, bindings: []const lockfile.Binding) ![]u8 {
+    const sorted = try alloc.dupe(lockfile.Binding, bindings);
+    defer alloc.free(sorted);
+    std.mem.sort(lockfile.Binding, sorted, {}, compareBindings);
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
+
+    var i: usize = 0;
+    while (i < sorted.len) {
+        const section_doc = sorted[i].doc_path;
+        try w.print("\"{s}\":\n", .{section_doc});
+        while (i < sorted.len and std.mem.eql(u8, sorted[i].doc_path, section_doc)) : (i += 1) {
+            try w.print("  \"{s}\":\n", .{sorted[i].target});
+            const fields = try sortedMetadataCopy(alloc, sorted[i].metadata.items);
+            defer alloc.free(fields);
+            for (fields) |f| try w.print("    {s}: \"{s}\"\n", .{ f.key, f.value });
+        }
+    }
+    return try out.toOwnedSlice();
+}
+
+/// V6: multi-line blocks separated by a single `---` line — no blank padding.
+/// Tests whether a distinctive anchor line compensates for lack of physical
+/// separation.
+fn serializeV6HrSeparator(alloc: std.mem.Allocator, bindings: []const lockfile.Binding) ![]u8 {
+    const sorted = try alloc.dupe(lockfile.Binding, bindings);
+    defer alloc.free(sorted);
+    std.mem.sort(lockfile.Binding, sorted, {}, compareBindings);
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
+    for (sorted, 0..) |b, i| {
+        if (i > 0) try w.writeAll("---\n");
+        try w.print("{s} -> {s}\n", .{ b.doc_path, b.target });
+        const fields = try sortedMetadataCopy(alloc, b.metadata.items);
+        defer alloc.free(fields);
+        for (fields) |f| try w.print("  {s}: {s}\n", .{ f.key, f.value });
+    }
+    return try out.toOwnedSlice();
+}
+
+/// V7: single-line per binding but with `doc_path` and `target` padded to the
+/// max widths across the whole file. Tests whether column alignment alone
+/// helps git's diff match corresponding fields across branches — no multi-line
+/// spreading, no separators.
+fn serializeV7AlignedColumns(alloc: std.mem.Allocator, bindings: []const lockfile.Binding) ![]u8 {
+    const sorted = try alloc.dupe(lockfile.Binding, bindings);
+    defer alloc.free(sorted);
+    std.mem.sort(lockfile.Binding, sorted, {}, compareBindings);
+
+    var max_doc: usize = 0;
+    var max_target: usize = 0;
+    for (sorted) |b| {
+        if (b.doc_path.len > max_doc) max_doc = b.doc_path.len;
+        if (b.target.len > max_target) max_target = b.target.len;
+    }
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
+    for (sorted) |b| {
+        try w.writeAll(b.doc_path);
+        for (0..max_doc - b.doc_path.len) |_| try w.writeByte(' ');
+        try w.writeAll(" -> ");
+        try w.writeAll(b.target);
+        for (0..max_target - b.target.len) |_| try w.writeByte(' ');
+        const fields = try sortedMetadataCopy(alloc, b.metadata.items);
+        defer alloc.free(fields);
+        for (fields) |f| try w.print(" {s}:{s}", .{ f.key, f.value });
+        try w.writeByte('\n');
+    }
+    return try out.toOwnedSlice();
+}
+
+/// V8: INI-style `[doc -> target]` header, `key = value` fields, blank between.
+/// The bracketed header is highly distinctive — arguably the strongest context
+/// anchor of all the variants. Comparable in spirit to V4 but with the full
+/// binding identity in the header line rather than split across `doc`+`target`.
+fn serializeV8IniBlocks(alloc: std.mem.Allocator, bindings: []const lockfile.Binding) ![]u8 {
+    const sorted = try alloc.dupe(lockfile.Binding, bindings);
+    defer alloc.free(sorted);
+    std.mem.sort(lockfile.Binding, sorted, {}, compareBindings);
+
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
+    for (sorted, 0..) |b, i| {
+        if (i > 0) try w.writeAll("\n");
+        try w.print("[{s} -> {s}]\n", .{ b.doc_path, b.target });
+        const fields = try sortedMetadataCopy(alloc, b.metadata.items);
+        defer alloc.free(fields);
+        for (fields) |f| try w.print("{s} = {s}\n", .{ f.key, f.value });
+    }
+    return try out.toOwnedSlice();
+}
+
 // ------------------------------------------------------------------
 // Oracle (conflict-rate only — no semantic parse-back check, since
 // variant formats don't have matching parsers yet).
@@ -460,13 +585,28 @@ fn gitMergeFile(
     return .{ .had_conflict = had_conflict, .byte_size = base_text.len };
 }
 
-const VARIANTS = 4;
-const VARIANT_NAMES = [_][]const u8{ "V0 baseline        ", "V1 multiline-block ", "V2 sectioned-single", "V3 sectioned-multi " };
-const VARIANT_FNS = [_]SerializeFn{
+const VARIANTS = 9;
+const VARIANT_NAMES = [_][]const u8{
+    "V0 baseline        ",
+    "V1 multiline-block ",
+    "V2 sectioned-single",
+    "V3 sectioned-multi ",
+    "V4 toml-tables     ",
+    "V5 yaml-nested     ",
+    "V6 hr-separator    ",
+    "V7 aligned-cols    ",
+    "V8 ini-blocks      ",
+};
+pub const VARIANT_FNS = [_]SerializeFn{
     serializeV0Baseline,
     serializeV1MultilineBlocks,
     serializeV2SectionedSingle,
     serializeV3SectionedMultiline,
+    serializeV4TomlTables,
+    serializeV5YamlNested,
+    serializeV6HrSeparator,
+    serializeV7AlignedColumns,
+    serializeV8IniBlocks,
 };
 
 var variant_total: [VARIANTS]u32 = .{0} ** VARIANTS;
