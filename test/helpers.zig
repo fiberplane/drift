@@ -2,6 +2,11 @@ const std = @import("std");
 const build_options = @import("build_options");
 const payload = @import("payload");
 
+/// Seed for minish property tests. Defaults to the first 16 hex chars of the
+/// current git HEAD so each commit explores a fresh slice of the state space.
+/// Null falls back to minish's timestamp seed. Override with `-Dminish-seed=N`.
+pub const minish_seed: ?u64 = build_options.minish_seed;
+
 /// Result returned by runDrift.
 pub const ExecResult = struct {
     stdout: []const u8,

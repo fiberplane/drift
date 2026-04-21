@@ -7,6 +7,7 @@ pub fn build(b: *std.Build) void {
 
     // Dependencies
     const clap_dep = b.dependency("clap", .{});
+    const minish_dep = b.dependency("minish", .{});
 
     // Build tree-sitter C library from vendor sources
     const ts_module = buildTreeSitter(b, target, optimize);
@@ -80,6 +81,14 @@ pub fn build(b: *std.Build) void {
     const test_options = b.addOptions();
     test_options.addOption([]const u8, "drift_bin", b.getInstallPath(.bin, "drift"));
 
+    // Property-test seed. Defaults to the git HEAD hash (first 16 hex chars as
+    // u64) so each commit explores a different slice of the state space; pass
+    // -Dminish-seed=N to reproduce a specific failing run. Null falls back to
+    // minish's timestamp-based seed.
+    const minish_seed_override = b.option(u64, "minish-seed", "Fixed seed for minish property tests");
+    const minish_seed: ?u64 = minish_seed_override orelse gitHeadSeed(b);
+    test_options.addOption(?u64, "minish_seed", minish_seed);
+
     // Helpers module for integration tests
     const helpers_module = b.createModule(.{
         .root_source_file = b.path("test/helpers.zig"),
@@ -99,6 +108,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "tree_sitter", .module = ts_module },
             .{ .name = "helpers", .module = helpers_module },
             .{ .name = "payload", .module = payload_module },
+            .{ .name = "minish", .module = minish_dep.module("minish") },
         },
     });
     linkGrammars(b, test_module);
@@ -161,6 +171,22 @@ fn buildTreeSitter(
     ts_zig_module.addOptions("build", options);
 
     return ts_zig_module;
+}
+
+/// First 16 hex chars of the current git HEAD as a u64. Returns null in a
+/// detached environment (no .git, no `git` on PATH, shallow clone w/ no HEAD).
+/// Used to seed property tests per-commit so each commit walks a different path.
+fn gitHeadSeed(b: *std.Build) ?u64 {
+    var code: u8 = undefined;
+    const stdout = b.runAllowFail(
+        &.{ "git", "rev-parse", "HEAD" },
+        &code,
+        .ignore,
+    ) catch return null;
+    defer b.allocator.free(stdout);
+    const trimmed = std.mem.trim(u8, stdout, " \t\r\n");
+    if (trimmed.len < 16) return null;
+    return std.fmt.parseInt(u64, trimmed[0..16], 16) catch null;
 }
 
 fn linkGrammars(b: *std.Build, module: *std.Build.Module) void {
