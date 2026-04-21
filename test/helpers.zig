@@ -7,6 +7,10 @@ const payload = @import("payload");
 /// Null falls back to minish's timestamp seed. Override with `-Dminish-seed=N`.
 pub const minish_seed: ?u64 = build_options.minish_seed;
 
+/// Whether the opt-in format-experiment test should run. Off by default since
+/// it ~doubles the test-suite wall time. Enable with `-Dformat-experiment=true`.
+pub const run_format_experiment: bool = build_options.run_format_experiment;
+
 /// Result returned by runDrift.
 pub const ExecResult = struct {
     stdout: []const u8,

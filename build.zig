@@ -89,6 +89,11 @@ pub fn build(b: *std.Build) void {
     const minish_seed: ?u64 = minish_seed_override orelse gitHeadSeed(b);
     test_options.addOption(?u64, "minish_seed", minish_seed);
 
+    // Off by default: the format-experiment test shells out to `git merge-file`
+    // 400+ times and ~doubles the test-suite wall time.
+    const run_format_experiment = b.option(bool, "format-experiment", "Run the lockfile format experiment test") orelse false;
+    test_options.addOption(bool, "run_format_experiment", run_format_experiment);
+
     // Helpers module for integration tests
     const helpers_module = b.createModule(.{
         .root_source_file = b.path("test/helpers.zig"),

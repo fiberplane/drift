@@ -14,4 +14,5 @@ test {
     _ = @import("test/property/smoke_test.zig");
     _ = @import("test/property/lockfile_reorder_test.zig");
     _ = @import("test/property/lockfile_merge_test.zig");
+    _ = @import("test/property/format_experiment_test.zig");
 }
