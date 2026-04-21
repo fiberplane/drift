@@ -165,15 +165,12 @@ pub fn main(init: std.process.Init) !void {
             }
             const format = parseFormat(sub.args.format, &stderr_w.interface);
             const silent = sub.args.silent != 0;
-            var null_buf: [1]u8 = undefined;
-            var discarding = std.Io.Writer.Discarding.init(&null_buf);
             var run_arena = std.heap.ArenaAllocator.init(gpa);
             defer run_arena.deinit();
             var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            const out_w = if (silent) &discarding.writer else &stdout_w.interface;
-            const run_status = lint.run(ctx, out_w, &stderr_w.interface, format, sub.args.changed) catch |err| switch (err) {
+            const result = lint.compute(ctx, &stderr_w.interface, sub.args.changed) catch |err| switch (err) {
                 error.LintCheckFailed => {
                     stdout_w.interface.flush() catch {};
                     stderr_w.interface.flush() catch {};
@@ -181,7 +178,19 @@ pub fn main(init: std.process.Init) !void {
                 },
                 else => exitWithError(&stderr_w.interface, err),
             };
-            // Exit-on-stale lives here (not in lint.run) so all `defer`s in run unwind
+            const run_status = result.status();
+            // In silent mode, the normal report is suppressed. When the run fails we
+            // redirect the same report to stderr so the user still gets the human-
+            // readable signal alongside the non-zero exit code.
+            const render_to_stdout = !silent;
+            const render_to_stderr_on_fail = silent and run_status == .fail;
+            if (render_to_stdout) {
+                renderCheckReport(ctx.run_arena, &stdout_w.interface, &result, format) catch |err| exitWithError(&stderr_w.interface, err);
+            }
+            if (render_to_stderr_on_fail) {
+                renderCheckReport(ctx.run_arena, &stderr_w.interface, &result, format) catch |err| exitWithError(&stderr_w.interface, err);
+            }
+            // Exit-on-stale lives here (not in lint.run) so all `defer`s above unwind
             // before the process dies. std.process.exit calls libc exit, which does not
             // run Zig defers — putting the exit in run leaks the result model.
             if (run_status == .fail) {
@@ -310,6 +319,18 @@ fn printUsage(w: *std.Io.Writer) void {
         \\JSON output is documented in docs/check-json-schema.md (drift.check.v1).
         \\
     , .{}) catch {};
+}
+
+fn renderCheckReport(
+    run_alloc: std.mem.Allocator,
+    w: *std.Io.Writer,
+    result: *const lint.CheckResult,
+    format: lint.Format,
+) !void {
+    switch (format) {
+        .text => try lint.renderText(w, result),
+        .json => try lint.renderJson(run_alloc, w, result),
+    }
 }
 
 fn fatal(stderr_w: *std.Io.Writer, comptime fmt: []const u8, args: anytype) noreturn {

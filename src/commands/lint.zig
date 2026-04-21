@@ -122,7 +122,7 @@ const DocCheckResult = struct {
     error_message: ?[]const u8 = null,
 };
 
-const CheckResult = struct {
+pub const CheckResult = struct {
     repo: ?[]const u8,
     checked_at_ms: i64,
     docs: std.ArrayList(DocCheckResult),
@@ -138,8 +138,16 @@ const CheckResult = struct {
     links_total: u32,
     links_broken: u32,
 
+    pub fn status(self: *const CheckResult) RunStatus {
+        return if (self.failed) .fail else .pass;
+    }
+
     fn docsChecked(self: *const CheckResult) u32 {
         return self.docs_fresh + self.docs_stale;
+    }
+
+    fn checkedAny(self: *const CheckResult) bool {
+        return self.docs.items.len > 0;
     }
 
     fn verificationState(self: *const CheckResult) []const u8 {
@@ -168,6 +176,25 @@ pub fn run(
     format: Format,
     changed_path: ?[]const u8,
 ) !RunStatus {
+    const result = try compute(ctx, stderr_w, changed_path);
+    switch (format) {
+        .text => try renderText(stdout_w, &result),
+        .json => try renderJson(ctx.run_arena, stdout_w, &result),
+    }
+    return result.status();
+}
+
+/// Run the lint check and return the computed result. Rendering is a separate
+/// step so callers (e.g. `--silent` mode in `main`) can choose where — and
+/// whether — to print the report based on the exit status.
+///
+/// All allocations live in `ctx.run_arena`; the caller is responsible for the
+/// arena's lifetime.
+pub fn compute(
+    ctx: CommandContext,
+    stderr_w: *std.Io.Writer,
+    changed_path: ?[]const u8,
+) !CheckResult {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
     const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
@@ -235,10 +262,8 @@ pub fn run(
     }
     try group.await(ctx.io);
 
-    var checked_any = false;
     for (results) |maybe| {
         const doc_result = maybe orelse continue;
-        checked_any = true;
         if (doc_result.error_message) |msg| {
             stderr_w.print("{s}", .{msg}) catch {};
             return error.LintCheckFailed;
@@ -246,12 +271,19 @@ pub fn run(
         mergeDocResult(ctx.run_arena, &result, doc_result) catch |err| return err;
     }
 
-    switch (format) {
-        .text => try writeResultsText(stdout_w, &result, checked_any),
-        .json => try writeResultsJson(ctx.run_arena, stdout_w, &result),
-    }
+    return result;
+}
 
-    return if (result.failed) .fail else .pass;
+/// Write the text report for an already-computed result. Safe to call more
+/// than once (e.g. to stdout under normal conditions and to stderr when
+/// `--silent` runs fail).
+pub fn renderText(w: *std.Io.Writer, result: *const CheckResult) !void {
+    try writeResultsText(w, result, result.checkedAny());
+}
+
+/// Write the JSON report for an already-computed result.
+pub fn renderJson(run_alloc: std.mem.Allocator, w: *std.Io.Writer, result: *const CheckResult) !void {
+    try writeResultsJson(run_alloc, w, result);
 }
 
 /// Per-doc check task, spawned once per `DocGroup` inside `Io.Group`.
