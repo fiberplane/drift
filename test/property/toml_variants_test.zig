@@ -74,7 +74,7 @@ fn serializeA(alloc: std.mem.Allocator, bindings: []const Binding) ![]u8 {
 
 /// B: nested tables keyed by (doc, target). Block header carries full
 /// binding identity.
-fn serializeB(alloc: std.mem.Allocator, bindings: []const Binding) ![]u8 {
+pub fn serializeB(alloc: std.mem.Allocator, bindings: []const Binding) ![]u8 {
     const sorted = try alloc.dupe(Binding, bindings);
     defer alloc.free(sorted);
     std.mem.sort(Binding, sorted, {}, compareBindings);
@@ -93,7 +93,7 @@ fn serializeB(alloc: std.mem.Allocator, bindings: []const Binding) ![]u8 {
 }
 
 /// C: arrays-of-tables grouped by doc. Target lives as a field.
-fn serializeC(alloc: std.mem.Allocator, bindings: []const Binding) ![]u8 {
+pub fn serializeC(alloc: std.mem.Allocator, bindings: []const Binding) ![]u8 {
     const sorted = try alloc.dupe(Binding, bindings);
     defer alloc.free(sorted);
     std.mem.sort(Binding, sorted, {}, compareBindings);
@@ -177,7 +177,7 @@ fn appendField(
 }
 
 /// A: look for `[[bindings]]` headers, accumulate fields until next header.
-fn parseA(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
+pub fn parseA(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
     var out: std.ArrayList(Binding) = .empty;
     errdefer out.deinit(alloc);
 
@@ -212,7 +212,7 @@ fn parseA(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
 }
 
 /// B: headers like `["doc"."target"]` carry the full binding identity.
-fn parseB(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
+pub fn parseB(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
     var out: std.ArrayList(Binding) = .empty;
     errdefer out.deinit(alloc);
 
@@ -251,7 +251,7 @@ fn parseB(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
 }
 
 /// C: headers like `[["doc"]]` set the current doc; target is a field.
-fn parseC(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
+pub fn parseC(alloc: std.mem.Allocator, bytes: []const u8) !std.ArrayList(Binding) {
     var out: std.ArrayList(Binding) = .empty;
     errdefer out.deinit(alloc);
 

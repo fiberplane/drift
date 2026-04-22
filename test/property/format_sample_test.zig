@@ -55,11 +55,22 @@ test "sample: render fixture under each format variant" {
         "V1 multiline-blocks",
         "V2 sectioned-single",
         "V3 sectioned-multi",
-        "V4 toml-tables",
+        "V4 toml-tables (A, flat)",
         "V5 yaml-nested",
         "V6 hr-separator",
         "V7 aligned-cols",
         "V8 ini-blocks",
+        "V9 toml (B, nested)",
+        "V10 toml (C, grouped)",
+        "V11 hash-V0 b=8",
+        "V12 hash-V0 b=16",
+        "V13 hash-V0 b=32",
+        "V14 hash-V0 b=64",
+        "V15 hash-V4 b=8",
+        "V16 hash-V4 b=16",
+        "V17 hash-V4 b=32",
+        "V18 hash-V4 b=64",
+        "V19 sem-V4 a-z (first letter of doc basename)",
     };
     for (names, 0..) |name, i| {
         const text = try experiment.VARIANT_FNS[i](a, bindings.items);
