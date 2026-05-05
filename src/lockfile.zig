@@ -187,9 +187,21 @@ pub fn groupByDoc(allocator: std.mem.Allocator, bindings: []Binding) !std.ArrayL
     return docs;
 }
 
-fn renderLineToWriter(writer: *std.Io.Writer, binding: Binding) !void {
+fn lessThanMetadataByKey(_: void, a: MetadataField, b: MetadataField) bool {
+    return std.mem.order(u8, a.key, b.key) == .lt;
+}
+
+/// Serializes one binding as `<doc_path> -> <target> [<key>:<value> ...]` with
+/// metadata sorted by key so the on-disk form is a function of semantic state
+/// only, not of `setField` insertion order. Uses `scratch` for a sort buffer.
+fn renderLineToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, binding: Binding) !void {
     try writer.print("{s} -> {s}", .{ binding.doc_path, binding.target });
-    for (binding.metadata.items) |field| {
+    if (binding.metadata.items.len == 0) return;
+
+    const sorted = try scratch.dupe(MetadataField, binding.metadata.items);
+    defer scratch.free(sorted);
+    std.mem.sort(MetadataField, sorted, {}, lessThanMetadataByKey);
+    for (sorted) |field| {
         try writer.print(" {s}:{s}", .{ field.key, field.value });
     }
 }
@@ -205,7 +217,7 @@ pub fn serializeToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, bin
     for (bindings) |binding| {
         var row: std.Io.Writer.Allocating = .init(scratch);
         errdefer row.deinit();
-        try renderLineToWriter(&row.writer, binding);
+        try renderLineToWriter(scratch, &row.writer, binding);
         try lines.append(scratch, try row.toOwnedSlice());
     }
 
@@ -356,6 +368,71 @@ test "serialize sorts lines and appends trailing newline" {
     try std.testing.expectEqualStrings(
         "docs/a.md -> src/a.ts\ndocs/z.md -> src/z.ts\n",
         content,
+    );
+}
+
+test "serialize emits metadata sorted by key regardless of insertion order" {
+    const allocator = std.testing.allocator;
+
+    const mkBinding = struct {
+        fn f(alloc: std.mem.Allocator, field_pairs: []const [2][]const u8) !Binding {
+            var metadata: std.ArrayList(MetadataField) = .empty;
+            errdefer {
+                for (metadata.items) |field| {
+                    alloc.free(field.key);
+                    alloc.free(field.value);
+                }
+                metadata.deinit(alloc);
+            }
+            for (field_pairs) |pair| {
+                try metadata.append(alloc, .{
+                    .key = try alloc.dupe(u8, pair[0]),
+                    .value = try alloc.dupe(u8, pair[1]),
+                });
+            }
+            return .{
+                .doc_path = try alloc.dupe(u8, "docs/x.md"),
+                .target = try alloc.dupe(u8, "src/x.ts"),
+                .metadata = metadata,
+            };
+        }
+    }.f;
+
+    const freeBinding = struct {
+        fn f(alloc: std.mem.Allocator, b: *Binding) void {
+            alloc.free(b.doc_path);
+            alloc.free(b.target);
+            for (b.metadata.items) |field| {
+                alloc.free(field.key);
+                alloc.free(field.value);
+            }
+            b.metadata.deinit(alloc);
+        }
+    }.f;
+
+    var forward = [_]Binding{try mkBinding(allocator, &.{
+        .{ "sig", "abc" },
+        .{ "origin", "x" },
+        .{ "lang", "ts" },
+    })};
+    defer freeBinding(allocator, &forward[0]);
+
+    var reverse = [_]Binding{try mkBinding(allocator, &.{
+        .{ "lang", "ts" },
+        .{ "origin", "x" },
+        .{ "sig", "abc" },
+    })};
+    defer freeBinding(allocator, &reverse[0]);
+
+    const out_forward = try serialize(allocator, &forward);
+    defer allocator.free(out_forward);
+    const out_reverse = try serialize(allocator, &reverse);
+    defer allocator.free(out_reverse);
+
+    try std.testing.expectEqualStrings(out_forward, out_reverse);
+    try std.testing.expectEqualStrings(
+        "docs/x.md -> src/x.ts lang:ts origin:x sig:abc\n",
+        out_forward,
     );
 }
 

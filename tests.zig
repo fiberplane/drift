@@ -9,4 +9,8 @@ test {
     _ = @import("test/integration/link_test.zig");
     _ = @import("test/integration/unlink_test.zig");
     _ = @import("test/integration/refs_test.zig");
+
+    // Property tests
+    _ = @import("test/property/smoke_test.zig");
+    _ = @import("test/property/lockfile_reorder_test.zig");
 }

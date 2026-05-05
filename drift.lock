@@ -1,6 +1,6 @@
-.claude/skills/drift/SKILL.md -> src/main.zig sig:b6166454e541e8a4 origin:github:fiberplane/drift
-.claude/skills/drift/SKILL.md -> src/vcs.zig sig:84da70be235ca9d4 origin:github:fiberplane/drift
-CLAUDE.md -> build.zig sig:7194b38f39dbadba
+.claude/skills/drift/SKILL.md -> src/main.zig origin:github:fiberplane/drift sig:b6166454e541e8a4
+.claude/skills/drift/SKILL.md -> src/vcs.zig origin:github:fiberplane/drift sig:84da70be235ca9d4
+CLAUDE.md -> build.zig sig:2dccb33f6b790afa
 CLAUDE.md -> src/main.zig sig:b6166454e541e8a4
 docs/CLI.md -> src/commands/link.zig sig:7bd7f824afc30e0b
 docs/CLI.md -> src/commands/lint.zig sig:fe7bd5a687f3e917
@@ -8,7 +8,7 @@ docs/CLI.md -> src/commands/refs.zig sig:f623b7774086094e
 docs/CLI.md -> src/commands/status.zig sig:eade166d24a20b81
 docs/CLI.md -> src/commands/unlink.zig sig:0dbe1ee3315211b5
 docs/DESIGN.md -> src/context.zig sig:82d9da38ea486f36
-docs/DESIGN.md -> src/lockfile.zig sig:0e4b79237b6e4c8b
+docs/DESIGN.md -> src/lockfile.zig sig:6fc5c159297244d1
 docs/DESIGN.md -> src/main.zig sig:b6166454e541e8a4
 docs/DESIGN.md -> src/symbols.zig sig:bbe250d43609daa1
 docs/DESIGN.md -> src/vcs.zig sig:84da70be235ca9d4

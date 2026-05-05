@@ -55,5 +55,9 @@
             .hash = "N-V-__8AAOphUwCl_jXY5BvJ_I-kB6cZuE48ZpMar9Gq2SiD",
             .lazy = true,
         },
+        .minish = .{
+            .url = "https://github.com/CogitatorTech/minish/archive/v0.3.0.tar.gz",
+            .hash = "minish-0.3.0-SQtSTYI3AgCxWdWbKxS_lvmfbp0wJk29ZW5C9CozJaxm",
+        },
     },
 }

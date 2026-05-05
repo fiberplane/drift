@@ -178,7 +178,7 @@ Additional modules:
 
 ### lockfile.zig
 
-Reads and writes `drift.lock`. The file is line-oriented: each non-blank, non-comment line is a binding in the format `<doc> -> <target> <key:value>...`. Parsing is two splits: `splitSequence(" -> ")` for the doc/rest boundary, then `splitScalar(' ')` for target and trailing key:value pairs. Writing sorts all lines lexically and appends a trailing newline.
+Reads and writes `drift.lock`. The file is line-oriented: each non-blank, non-comment line is a binding in the format `<doc> -> <target> <key:value>...`. Parsing is two splits: `splitSequence(" -> ")` for the doc/rest boundary, then `splitScalar(' ')` for target and trailing key:value pairs. Writing canonicalizes each binding before output: metadata fields are sorted by key, then all rendered lines are sorted lexically and written with a trailing newline.
 
 Discovery: walks up from cwd checking for `drift.lock` at each directory. The lockfile's directory becomes the project root for resolving relative paths.
 
@@ -221,6 +221,7 @@ Format rules:
 - One binding per line: `<doc> -> <target> <key:value>...`
 - Sorted lexically by full line content
 - Trailing key:value pairs for extensible metadata (`sig:`, `origin:`, future fields)
+- Metadata fields are serialized in key order so semantically equivalent bindings produce identical bytes
 - Lines starting with `#` are comments, blank lines ignored
 - Discovery: walk up from cwd until `drift.lock` is found
 

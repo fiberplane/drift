@@ -26,6 +26,7 @@ Reference: docs/DESIGN.md, docs/DECISIONS.md, docs/CLI.md, docs/RELEASING.md
 - File-is-the-struct pattern (Ghostty convention)
 - No `anyerror` in public APIs — explicit error sets
 - `zig fmt` enforced
+- Property tests use minish with deterministic seed overrides
 - All tests use `std.testing.allocator`
 
 ## Code Patterns
@@ -64,5 +65,6 @@ Markdown is a supported language with a two-grammar architecture: block grammar 
 
 - `zig build test` runs all tests
 - Integration tests in `test/integration/`
+- Property tests in `test/property/` use minish; pass `-Dminish-seed=<u64>` to reproduce a run
 - All tests use `std.testing.allocator` (auto leak detection)
 - Test fixtures per language in `test/fixtures/`
