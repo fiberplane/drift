@@ -30,7 +30,9 @@ test "link adds new file binding to drift.lock" {
 
     const lock_content = try repo.readFile("drift.lock");
     defer allocator.free(lock_content);
-    try helpers.expectContains(lock_content, "docs/doc.md -> src/new.ts sig:");
+    try helpers.expectContains(lock_content, "doc = \"docs/doc.md\"\n");
+    try helpers.expectContains(lock_content, "target = \"src/new.ts\"\n");
+    try helpers.expectContains(lock_content, "sig = ");
     try helpers.expectNotContains(lock_content, "doc:");
 
     const doc_content = try repo.readFile("docs/doc.md");
@@ -54,7 +56,9 @@ test "link adds symbol binding to drift.lock" {
 
     const lock_content = try repo.readFile("drift.lock");
     defer allocator.free(lock_content);
-    try helpers.expectContains(lock_content, "docs/doc.md -> src/lib.ts#myFunction sig:");
+    try helpers.expectContains(lock_content, "doc = \"docs/doc.md\"\n");
+    try helpers.expectContains(lock_content, "target = \"src/lib.ts#myFunction\"\n");
+    try helpers.expectContains(lock_content, "sig = ");
 }
 
 test "link stores markdown heading bindings using slug fragments" {
@@ -74,7 +78,9 @@ test "link stores markdown heading bindings using slug fragments" {
 
     const lock_content = try repo.readFile("drift.lock");
     defer allocator.free(lock_content);
-    try helpers.expectContains(lock_content, "docs/overview.md -> docs/auth.md#token-validation sig:");
+    try helpers.expectContains(lock_content, "doc = \"docs/overview.md\"\n");
+    try helpers.expectContains(lock_content, "target = \"docs/auth.md#token-validation\"\n");
+    try helpers.expectContains(lock_content, "sig = ");
 }
 
 test "link rejects missing markdown heading target" {
@@ -187,7 +193,9 @@ test "link blanket mode relinks with --doc-is-still-accurate override" {
     const after = try repo.readFile("drift.lock");
     defer allocator.free(after);
     try std.testing.expect(!std.mem.eql(u8, before, after));
-    try helpers.expectContains(after, "docs/doc.md -> src/main.ts sig:");
+    try helpers.expectContains(after, "doc = \"docs/doc.md\"\n");
+    try helpers.expectContains(after, "target = \"src/main.ts\"\n");
+    try helpers.expectContains(after, "sig = ");
 }
 
 test "link no longer migrates legacy frontmatter anchors" {
@@ -227,7 +235,9 @@ test "link uses nested drift.lock when doc is in nested scope" {
     // Verify binding is in nested/drift.lock, NOT root drift.lock
     const nested_lock = try repo.readFile("nested/drift.lock");
     defer allocator.free(nested_lock);
-    try helpers.expectContains(nested_lock, "doc.md -> code.ts sig:");
+    try helpers.expectContains(nested_lock, "doc = \"doc.md\"\n");
+    try helpers.expectContains(nested_lock, "target = \"code.ts\"\n");
+    try helpers.expectContains(nested_lock, "sig = ");
 
     const root_lock = try repo.readFile("drift.lock");
     defer allocator.free(root_lock);

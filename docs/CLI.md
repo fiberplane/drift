@@ -10,7 +10,7 @@ Check all docs for staleness. The primary command. Exits 1 if any anchor is stal
 drift check [--format text|json] [--changed <path>] [--silent]
 ```
 
-Reads bindings from `drift.lock`, recomputes content signatures for each target, and compares against the stored `sig:` values. Reports stale anchors with reasons.
+Reads bindings from `drift.lock`, recomputes content signatures for each target, and compares against the stored `sig` values. Reports stale anchors with reasons.
 
 The `--changed <path>` flag scopes checking to docs whose targets match the given path prefix. This enables efficient CI integration — a pipeline that knows which files changed can check only the affected docs without running a full lint.
 
@@ -45,7 +45,7 @@ vendor/shared-skill.md
 - `STALE` means a lockfile anchor's target has changed since the signature was recorded.
 - `BROKEN` means a plain markdown link in the doc points to a file that doesn't exist — no lockfile entry is needed for this check.
 
-Anchors with an `origin:` field that doesn't match the current repo are skipped — they reference files in a different repository.
+Anchors with an `origin` field that doesn't match the current repo are skipped — they reference files in a different repository.
 
 ## drift status
 
@@ -71,7 +71,7 @@ docs/payments.md (1 anchor)
 
 ## drift link
 
-Add or refresh bindings in `drift.lock`. `drift link` computes a content signature (`sig:`) from the target file's current syntax fingerprint and writes it to the lockfile. Creates `drift.lock` if it doesn't exist. The lockfile is discovered by walking up from the doc's directory, not from cwd — if a nested `drift.lock` exists closer to the doc, that lockfile is used.
+Add or refresh bindings in `drift.lock`. `drift link` computes a content signature (`sig`) from the target file's current syntax fingerprint and writes it to the TOML lockfile. Creates `drift.lock` if it doesn't exist. The lockfile is discovered by walking up from the doc's directory, not from cwd — if a nested `drift.lock` exists closer to the doc, that lockfile is used.
 
 ```
 drift link <doc-path> <file> [--doc-is-still-accurate]
@@ -92,7 +92,7 @@ $ drift link docs/overview.md docs/auth.md#Authentication
 added docs/overview.md -> docs/auth.md#Authentication sig:d4e5f6a7b8c9d0e1
 ```
 
-**Blanket mode** — refreshes all `sig:` values for that doc in `drift.lock`:
+**Blanket mode** — refreshes all `sig` values for that doc in `drift.lock`:
 
 ```
 $ drift link docs/auth.md

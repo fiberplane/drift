@@ -60,6 +60,7 @@ pub const DocBindings = struct {
 pub const ParseError = error{
     InvalidBindingLine,
     InvalidMetadataField,
+    UnsupportedLockfileVersion,
 };
 
 /// `run` holds durable lockfile state; `scratch` holds walk temporaries and the lockfile file buffer (reset by caller).
@@ -133,6 +134,13 @@ pub fn readAtPath(io: std.Io, run: std.mem.Allocator, scratch: std.mem.Allocator
 }
 
 pub fn parseInto(allocator: std.mem.Allocator, content: []const u8, bindings: *std.ArrayList(Binding)) !void {
+    if (containsTomlSyntax(content)) {
+        try parseTomlInto(allocator, content, bindings);
+        return;
+    }
+
+    // Compatibility reader for pre-TOML lockfiles. All writes use V1 TOML, so
+    // old files are upgraded on the next mutation.
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -191,45 +199,65 @@ fn lessThanMetadataByKey(_: void, a: MetadataField, b: MetadataField) bool {
     return std.mem.order(u8, a.key, b.key) == .lt;
 }
 
-/// Serializes one binding as `<doc_path> -> <target> [<key>:<value> ...]` with
-/// metadata sorted by key so the on-disk form is a function of semantic state
-/// only, not of `setField` insertion order. Uses `scratch` for a sort buffer.
-fn renderLineToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, binding: Binding) !void {
-    try writer.print("{s} -> {s}", .{ binding.doc_path, binding.target });
-    if (binding.metadata.items.len == 0) return;
+fn hasInvalidTomlBasicStringByte(value: []const u8) bool {
+    return std.mem.indexOfAny(u8, value, "\"\\\n\r") != null;
+}
+
+fn writeTomlString(writer: *std.Io.Writer, value: []const u8) !void {
+    try writer.writeByte('"');
+    try writer.writeAll(value);
+    try writer.writeByte('"');
+}
+
+fn renderTomlBindingToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, binding: Binding) !void {
+    if (hasInvalidTomlBasicStringByte(binding.doc_path) or hasInvalidTomlBasicStringByte(binding.target)) return error.InvalidBindingLine;
+
+    try writer.writeAll("[[bindings]]\n");
+    try writer.writeAll("doc = ");
+    try writeTomlString(writer, binding.doc_path);
+    try writer.writeByte('\n');
+    try writer.writeAll("target = ");
+    try writeTomlString(writer, binding.target);
+    try writer.writeByte('\n');
 
     const sorted = try scratch.dupe(MetadataField, binding.metadata.items);
     defer scratch.free(sorted);
     std.mem.sort(MetadataField, sorted, {}, lessThanMetadataByKey);
     for (sorted) |field| {
-        try writer.print(" {s}:{s}", .{ field.key, field.value });
+        if (field.key.len == 0 or hasInvalidTomlBasicStringByte(field.key) or hasInvalidTomlBasicStringByte(field.value)) return error.InvalidMetadataField;
+        try writer.print("{s} = ", .{field.key});
+        try writeTomlString(writer, field.value);
+        try writer.writeByte('\n');
     }
 }
 
-/// Writes sorted lockfile lines to `writer`. Uses `scratch` for sort temporaries.
+/// Writes sorted V1 TOML lockfile tables to `writer`. Uses `scratch` for sort temporaries.
 pub fn serializeToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, bindings: []const Binding) !void {
-    var lines: std.ArrayList([]const u8) = .empty;
+    try writer.writeAll("version = 1\n");
+    if (bindings.len != 0) try writer.writeByte('\n');
+
+    var blocks: std.ArrayList([]const u8) = .empty;
     defer {
-        for (lines.items) |line| scratch.free(line);
-        lines.deinit(scratch);
+        for (blocks.items) |block| scratch.free(block);
+        blocks.deinit(scratch);
     }
 
     for (bindings) |binding| {
-        var row: std.Io.Writer.Allocating = .init(scratch);
-        errdefer row.deinit();
-        try renderLineToWriter(scratch, &row.writer, binding);
-        try lines.append(scratch, try row.toOwnedSlice());
+        var block: std.Io.Writer.Allocating = .init(scratch);
+        errdefer block.deinit();
+        try renderTomlBindingToWriter(scratch, &block.writer, binding);
+        try blocks.append(scratch, try block.toOwnedSlice());
     }
 
-    std.mem.sort([]const u8, lines.items, {}, struct {
+    std.mem.sort([]const u8, blocks.items, {}, struct {
         fn lessThan(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.order(u8, a, b) == .lt;
         }
     }.lessThan);
 
-    for (lines.items) |line| {
-        try writer.writeAll(line);
-        try writer.writeByte('\n');
+    for (blocks.items, 0..) |block, i| {
+        if (i != 0) try writer.writeByte('\n');
+        try writer.writeAll(block);
     }
 }
 
@@ -247,6 +275,115 @@ pub fn writeFile(io: std.Io, lockfile: *const Lockfile, scratch: std.mem.Allocat
     var fw = file.writer(io, &buf);
     defer fw.interface.flush() catch {};
     try serializeToWriter(scratch, &fw.interface, lockfile.bindings.items);
+}
+
+fn containsTomlSyntax(content: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.eql(u8, trimmed, "[[bindings]]") or isTopLevelVersionLine(trimmed)) return true;
+    }
+    return false;
+}
+
+fn isTopLevelVersionLine(line: []const u8) bool {
+    const equals = std.mem.findScalar(u8, line, '=') orelse return false;
+    const key = std.mem.trim(u8, line[0..equals], " \t");
+    return std.mem.eql(u8, key, "version");
+}
+
+const PendingBinding = struct {
+    doc_path: ?[]const u8 = null,
+    target: ?[]const u8 = null,
+    metadata: std.ArrayList(MetadataField) = .empty,
+
+    fn deinit(self: *PendingBinding, allocator: std.mem.Allocator) void {
+        if (self.doc_path) |doc_path| allocator.free(doc_path);
+        if (self.target) |target| allocator.free(target);
+        for (self.metadata.items) |field| {
+            allocator.free(field.key);
+            allocator.free(field.value);
+        }
+        self.metadata.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn finish(self: *PendingBinding) !Binding {
+        const doc_path = self.doc_path orelse return error.InvalidBindingLine;
+        const target = self.target orelse return error.InvalidBindingLine;
+        const metadata = self.metadata;
+        self.* = .{};
+        return .{ .doc_path = doc_path, .target = target, .metadata = metadata };
+    }
+};
+
+fn parseTomlInto(allocator: std.mem.Allocator, content: []const u8, bindings: *std.ArrayList(Binding)) !void {
+    var pending: ?PendingBinding = null;
+    errdefer if (pending) |*p| p.deinit(allocator);
+
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+
+        if (std.mem.eql(u8, trimmed, "[[bindings]]")) {
+            if (pending) |*p| try bindings.append(allocator, try p.finish());
+            pending = .{};
+            continue;
+        }
+
+        if (pending == null) {
+            if (isTopLevelVersionLine(trimmed)) {
+                try parseLockfileVersion(trimmed);
+                continue;
+            }
+            return error.InvalidBindingLine;
+        }
+        try parseTomlFieldInto(allocator, trimmed, &pending.?);
+    }
+
+    if (pending) |*p| try bindings.append(allocator, try p.finish());
+}
+
+fn parseLockfileVersion(line: []const u8) !void {
+    const equals = std.mem.findScalar(u8, line, '=') orelse return error.InvalidBindingLine;
+    const raw_value = std.mem.trim(u8, line[equals + 1 ..], " \t");
+    const value = if (raw_value.len >= 2 and raw_value[0] == '"' and raw_value[raw_value.len - 1] == '"')
+        raw_value[1 .. raw_value.len - 1]
+    else
+        raw_value;
+    const version = std.fmt.parseUnsigned(u32, value, 10) catch return error.InvalidBindingLine;
+    if (version != 1) return error.UnsupportedLockfileVersion;
+}
+
+fn parseTomlFieldInto(allocator: std.mem.Allocator, line: []const u8, pending: *PendingBinding) !void {
+    const equals = std.mem.findScalar(u8, line, '=') orelse return error.InvalidMetadataField;
+    const key = std.mem.trim(u8, line[0..equals], " \t");
+    const raw_value = std.mem.trim(u8, line[equals + 1 ..], " \t");
+    if (key.len == 0) return error.InvalidMetadataField;
+
+    const value = try parseTomlString(allocator, raw_value);
+    errdefer allocator.free(value);
+
+    if (std.mem.eql(u8, key, "doc")) {
+        if (pending.doc_path) |old| allocator.free(old);
+        pending.doc_path = value;
+    } else if (std.mem.eql(u8, key, "target")) {
+        if (pending.target) |old| allocator.free(old);
+        pending.target = value;
+    } else {
+        try pending.metadata.append(allocator, .{
+            .key = try allocator.dupe(u8, key),
+            .value = value,
+        });
+    }
+}
+
+fn parseTomlString(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"') return error.InvalidMetadataField;
+    const value = raw[1 .. raw.len - 1];
+    if (hasInvalidTomlBasicStringByte(value)) return error.InvalidMetadataField;
+    return try allocator.dupe(u8, value);
 }
 
 fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
@@ -334,7 +471,55 @@ test "parseInto reads bindings and metadata" {
     try std.testing.expectEqualStrings("github:fiberplane/drift", bindings.items[1].fieldValue("origin").?);
 }
 
-test "serialize sorts lines and appends trailing newline" {
+test "parseInto reads V1 TOML tables, comments, and unordered metadata" {
+    const allocator = std.testing.allocator;
+    const content =
+        "version = 1\n" ++
+        "# 00\n" ++
+        "[[bindings]]\n" ++
+        "target = \"src/auth/provider.ts#AuthConfig\"\n" ++
+        "origin = \"github:fiberplane/drift\"\n" ++
+        "doc = \"docs/auth.md\"\n" ++
+        "sig = \"1a2b3c4d5e6f7890\"\n" ++
+        "\n" ++
+        "# arbitrary V17 bucket/header-compatible comment\n" ++
+        "[[bindings]]\n" ++
+        "doc = \"docs/auth.md\"\n" ++
+        "target = \"src/auth/login.ts\"\n" ++
+        "sig = \"a1b2c3d4e5f6a7b8\"\n";
+
+    var bindings: std.ArrayList(Binding) = .empty;
+    defer {
+        for (bindings.items) |*binding| {
+            allocator.free(binding.doc_path);
+            allocator.free(binding.target);
+            for (binding.metadata.items) |field| {
+                allocator.free(field.key);
+                allocator.free(field.value);
+            }
+            binding.metadata.deinit(allocator);
+        }
+        bindings.deinit(allocator);
+    }
+
+    try parseInto(allocator, content, &bindings);
+    try std.testing.expectEqual(@as(usize, 2), bindings.items.len);
+    try std.testing.expectEqualStrings("docs/auth.md", bindings.items[0].doc_path);
+    try std.testing.expectEqualStrings("src/auth/provider.ts#AuthConfig", bindings.items[0].target);
+    try std.testing.expectEqualStrings("github:fiberplane/drift", bindings.items[0].fieldValue("origin").?);
+    try std.testing.expectEqualStrings("a1b2c3d4e5f6a7b8", bindings.items[1].fieldValue("sig").?);
+}
+
+test "parseInto accepts empty V1 TOML lockfile" {
+    const allocator = std.testing.allocator;
+    var bindings: std.ArrayList(Binding) = .empty;
+    defer bindings.deinit(allocator);
+
+    try parseInto(allocator, "version = 1\n# comment only\n", &bindings);
+    try std.testing.expectEqual(@as(usize, 0), bindings.items.len);
+}
+
+test "serialize sorts tables and appends trailing newline" {
     const allocator = std.testing.allocator;
 
     var bindings: std.ArrayList(Binding) = .empty;
@@ -366,7 +551,15 @@ test "serialize sorts lines and appends trailing newline" {
     defer allocator.free(content);
 
     try std.testing.expectEqualStrings(
-        "docs/a.md -> src/a.ts\ndocs/z.md -> src/z.ts\n",
+        "version = 1\n" ++
+            "\n" ++
+            "[[bindings]]\n" ++
+            "doc = \"docs/a.md\"\n" ++
+            "target = \"src/a.ts\"\n" ++
+            "\n" ++
+            "[[bindings]]\n" ++
+            "doc = \"docs/z.md\"\n" ++
+            "target = \"src/z.ts\"\n",
         content,
     );
 }
@@ -431,7 +624,14 @@ test "serialize emits metadata sorted by key regardless of insertion order" {
 
     try std.testing.expectEqualStrings(out_forward, out_reverse);
     try std.testing.expectEqualStrings(
-        "docs/x.md -> src/x.ts lang:ts origin:x sig:abc\n",
+        "version = 1\n" ++
+            "\n" ++
+            "[[bindings]]\n" ++
+            "doc = \"docs/x.md\"\n" ++
+            "target = \"src/x.ts\"\n" ++
+            "lang = \"ts\"\n" ++
+            "origin = \"x\"\n" ++
+            "sig = \"abc\"\n",
         out_forward,
     );
 }

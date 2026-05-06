@@ -480,8 +480,12 @@ test "check --format json reports verification_state partial when one doc skips 
     defer allocator.free(existing_lock);
     const combined_lock = try std.fmt.allocPrint(
         allocator,
-        "{s}docs/skip.md -> src/skip.ts sig:deadbeefdeadbeef origin:github:other/repo\n",
-        .{existing_lock},
+        "{s}\n[[bindings]]\n" ++
+            "doc = \"docs/skip.md\"\n" ++
+            "target = \"src/skip.ts\"\n" ++
+            "origin = \"github:other/repo\"\n" ++
+            "sig = \"deadbeefdeadbeef\"\n",
+        .{std.mem.trim(u8, existing_lock, "\n")},
     );
     defer allocator.free(combined_lock);
     try repo.writeFile("drift.lock", combined_lock);
@@ -632,7 +636,6 @@ test "lint reports broken relative markdown links" {
     try helpers.expectContains(result.stdout, "BROKEN  docs/missing.md (link target not found)");
     try helpers.expectContains(result.stdout, "1 broken link");
 }
-
 
 test "lint checks broken links in discovered docs without drift bindings" {
     const allocator = std.testing.allocator;

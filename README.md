@@ -67,9 +67,18 @@ drift link docs/auth.md
 
 After linking, bindings live in `drift.lock` at the repo root:
 
-```
-docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890
-docs/auth.md -> src/auth/provider.ts#AuthConfig sig:1a2b3c4d5e6f7890
+```toml
+version = 1
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/login.ts"
+sig = "e4f8a2c10b3d7890"
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/provider.ts#AuthConfig"
+sig = "1a2b3c4d5e6f7890"
 ```
 
 You can also use inline references in the doc body — `@./src/auth/provider.ts#AuthConfig` — and `drift link` will stamp those in the lockfile too.
@@ -77,8 +86,8 @@ You can also use inline references in the doc body — `@./src/auth/provider.ts#
 Every anchor has three parts:
 
 ```
-src/auth/provider.ts   #AuthConfig   sig:1a2b3c4d5e6f7890
-└── file path ──────┘  └─ symbol ─┘  └──── signature ────┘
+src/auth/provider.ts   #AuthConfig   sig = "1a2b3c4d5e6f7890"
+└── file path ──────┘  └─ symbol ─┘  └──────── signature ────────┘
 ```
 
 - **Path** — the file you're binding to, relative to the repo root.
@@ -87,10 +96,16 @@ src/auth/provider.ts   #AuthConfig   sig:1a2b3c4d5e6f7890
 
 ### Cross-repo docs (origin)
 
-Docs that travel across repo boundaries — installed skills, vendored docs, shared templates — can declare where their anchors belong via a trailing `origin:` field:
+Docs that travel across repo boundaries — installed skills, vendored docs, shared templates — can declare where their anchors belong via an `origin` field:
 
-```
-docs/skill.md -> src/main.zig sig:a1b2c3d4e5f67890 origin:github:fiberplane/drift
+```toml
+version = 1
+
+[[bindings]]
+doc = "docs/skill.md"
+target = "src/main.zig"
+origin = "github:fiberplane/drift"
+sig = "a1b2c3d4e5f67890"
 ```
 
 When `origin` doesn't match the current repo, `drift check` skips those anchors instead of reporting false "file not found" errors. Anchors without `origin` are always checked.
@@ -109,7 +124,7 @@ drift refs          Reverse lookup — which docs reference a given file
 
 ## How staleness works
 
-Each anchor's `sig:` field records a fingerprint of the code at the time it was linked. `drift check` recomputes the fingerprint from the current file and compares. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — drift parses with tree-sitter and hashes a normalized AST fingerprint (node kinds + token text, no whitespace or position data). Reformatting won't trigger false positives. Symbol-level anchors (`#AuthConfig`) narrow this to just that declaration's subtree. Unsupported languages fall back to raw content comparison.
+Each anchor's `sig` field records a fingerprint of the code at the time it was linked. `drift check` recomputes the fingerprint from the current file and compares. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — drift parses with tree-sitter and hashes a normalized AST fingerprint (node kinds + token text, no whitespace or position data). Reformatting won't trigger false positives. Symbol-level anchors (`#AuthConfig`) narrow this to just that declaration's subtree. Unsupported languages fall back to raw content comparison.
 
 No VCS history is needed for staleness detection — `drift check` works entirely from the stored signature and current file content.
 
@@ -154,7 +169,7 @@ For faster CI runs, use `--changed` to scope checking to docs affected by the fi
       - run: drift check --changed src/auth
 ```
 
-`fetch-depth: 0` is recommended — drift uses VCS history for blame info on stale anchors. With `sig:` provenance (the default), staleness detection itself doesn't need history. The setup action auto-detects platform, downloads the right binary from GitHub releases, and verifies its checksum before installing.
+`fetch-depth: 0` is recommended — drift uses VCS history for blame info on stale anchors. With `sig` provenance (the default), staleness detection itself doesn't need history. The setup action auto-detects platform, downloads the right binary from GitHub releases, and verifies its checksum before installing.
 
 ## Development
 
