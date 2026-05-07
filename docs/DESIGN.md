@@ -245,7 +245,8 @@ Format rules:
 - One binding per `[[bindings]]` block with `doc`, `target`, and metadata string fields
 - Blocks sorted by `(doc, target)` with deterministic tie-breaking for duplicate bindings
 - Metadata fields are serialized in key order so semantically equivalent bindings produce identical bytes
-- Lines starting with `#` are comments, blank lines ignored
+- Values are single-line TOML basic strings; drift escapes `\\b`, `\\t`, `\\n`, `\\f`, `\\r`, `\\\"`, and `\\\\`
+- Lines starting with `#` are comments, blank lines ignored; inline comments and general TOML tables are outside the lockfile subset
 - Discovery: walk up from cwd until `drift.lock` is found
 
 ### .drift/config.yaml

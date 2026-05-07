@@ -199,19 +199,34 @@ fn lessThanMetadataByKey(_: void, a: MetadataField, b: MetadataField) bool {
     return std.mem.order(u8, a.key, b.key) == .lt;
 }
 
-fn hasInvalidTomlBasicStringByte(value: []const u8) bool {
-    return std.mem.indexOfAny(u8, value, "\"\\\n\r") != null;
+fn isValidTomlBareKey(key: []const u8) bool {
+    if (key.len == 0) return false;
+    for (key) |c| switch (c) {
+        'A'...'Z', 'a'...'z', '0'...'9', '_', '-' => {},
+        else => return false,
+    };
+    return true;
 }
 
 fn writeTomlString(writer: *std.Io.Writer, value: []const u8) !void {
+    if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidMetadataField;
+
     try writer.writeByte('"');
-    try writer.writeAll(value);
+    for (value) |c| switch (c) {
+        '\x08' => try writer.writeAll("\\b"),
+        '\t' => try writer.writeAll("\\t"),
+        '\n' => try writer.writeAll("\\n"),
+        '\x0c' => try writer.writeAll("\\f"),
+        '\r' => try writer.writeAll("\\r"),
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        0x00...0x07, 0x0b, 0x0e...0x1f, 0x7f => return error.InvalidMetadataField,
+        else => try writer.writeByte(c),
+    };
     try writer.writeByte('"');
 }
 
 fn renderTomlBindingToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer, binding: Binding) !void {
-    if (hasInvalidTomlBasicStringByte(binding.doc_path) or hasInvalidTomlBasicStringByte(binding.target)) return error.InvalidBindingLine;
-
     try writer.writeAll("[[bindings]]\n");
     try writer.writeAll("doc = ");
     try writeTomlString(writer, binding.doc_path);
@@ -224,7 +239,7 @@ fn renderTomlBindingToWriter(scratch: std.mem.Allocator, writer: *std.Io.Writer,
     defer scratch.free(sorted);
     std.mem.sort(MetadataField, sorted, {}, lessThanMetadataByKey);
     for (sorted) |field| {
-        if (field.key.len == 0 or hasInvalidTomlBasicStringByte(field.key) or hasInvalidTomlBasicStringByte(field.value)) return error.InvalidMetadataField;
+        if (!isValidTomlBareKey(field.key) or std.mem.eql(u8, field.key, "doc") or std.mem.eql(u8, field.key, "target") or std.mem.eql(u8, field.key, "version")) return error.InvalidMetadataField;
         try writer.print("{s} = ", .{field.key});
         try writeTomlString(writer, field.value);
         try writer.writeByte('\n');
@@ -320,6 +335,7 @@ const PendingBinding = struct {
 fn parseTomlInto(allocator: std.mem.Allocator, content: []const u8, bindings: *std.ArrayList(Binding)) !void {
     var pending: ?PendingBinding = null;
     errdefer if (pending) |*p| p.deinit(allocator);
+    var version_seen = false;
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
@@ -327,6 +343,7 @@ fn parseTomlInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
         if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
         if (std.mem.eql(u8, trimmed, "[[bindings]]")) {
+            if (!version_seen) return error.InvalidBindingLine;
             if (pending) |*p| try bindings.append(allocator, try p.finish());
             pending = .{};
             continue;
@@ -334,7 +351,9 @@ fn parseTomlInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
 
         if (pending == null) {
             if (isTopLevelVersionLine(trimmed)) {
+                if (version_seen) return error.InvalidBindingLine;
                 try parseLockfileVersion(trimmed);
+                version_seen = true;
                 continue;
             }
             return error.InvalidBindingLine;
@@ -342,17 +361,14 @@ fn parseTomlInto(allocator: std.mem.Allocator, content: []const u8, bindings: *s
         try parseTomlFieldInto(allocator, trimmed, &pending.?);
     }
 
+    if (!version_seen) return error.InvalidBindingLine;
     if (pending) |*p| try bindings.append(allocator, try p.finish());
 }
 
 fn parseLockfileVersion(line: []const u8) !void {
     const equals = std.mem.findScalar(u8, line, '=') orelse return error.InvalidBindingLine;
     const raw_value = std.mem.trim(u8, line[equals + 1 ..], " \t");
-    const value = if (raw_value.len >= 2 and raw_value[0] == '"' and raw_value[raw_value.len - 1] == '"')
-        raw_value[1 .. raw_value.len - 1]
-    else
-        raw_value;
-    const version = std.fmt.parseUnsigned(u32, value, 10) catch return error.InvalidBindingLine;
+    const version = std.fmt.parseUnsigned(u32, raw_value, 10) catch return error.InvalidBindingLine;
     if (version != 1) return error.UnsupportedLockfileVersion;
 }
 
@@ -360,20 +376,25 @@ fn parseTomlFieldInto(allocator: std.mem.Allocator, line: []const u8, pending: *
     const equals = std.mem.findScalar(u8, line, '=') orelse return error.InvalidMetadataField;
     const key = std.mem.trim(u8, line[0..equals], " \t");
     const raw_value = std.mem.trim(u8, line[equals + 1 ..], " \t");
-    if (key.len == 0) return error.InvalidMetadataField;
+    if (!isValidTomlBareKey(key) or std.mem.eql(u8, key, "version")) return error.InvalidMetadataField;
 
     const value = try parseTomlString(allocator, raw_value);
     errdefer allocator.free(value);
 
     if (std.mem.eql(u8, key, "doc")) {
-        if (pending.doc_path) |old| allocator.free(old);
+        if (pending.doc_path != null) return error.InvalidBindingLine;
         pending.doc_path = value;
     } else if (std.mem.eql(u8, key, "target")) {
-        if (pending.target) |old| allocator.free(old);
+        if (pending.target != null) return error.InvalidBindingLine;
         pending.target = value;
     } else {
+        for (pending.metadata.items) |field| {
+            if (std.mem.eql(u8, field.key, key)) return error.InvalidMetadataField;
+        }
+        const owned_key = try allocator.dupe(u8, key);
+        errdefer allocator.free(owned_key);
         try pending.metadata.append(allocator, .{
-            .key = try allocator.dupe(u8, key),
+            .key = owned_key,
             .value = value,
         });
     }
@@ -381,9 +402,36 @@ fn parseTomlFieldInto(allocator: std.mem.Allocator, line: []const u8, pending: *
 
 fn parseTomlString(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"') return error.InvalidMetadataField;
-    const value = raw[1 .. raw.len - 1];
-    if (hasInvalidTomlBasicStringByte(value)) return error.InvalidMetadataField;
-    return try allocator.dupe(u8, value);
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var i: usize = 1;
+    while (i < raw.len - 1) : (i += 1) {
+        const c = raw[i];
+        if (c == '\\') {
+            i += 1;
+            if (i >= raw.len - 1) return error.InvalidMetadataField;
+            switch (raw[i]) {
+                'b' => try out.append(allocator, '\x08'),
+                't' => try out.append(allocator, '\t'),
+                'n' => try out.append(allocator, '\n'),
+                'f' => try out.append(allocator, '\x0c'),
+                'r' => try out.append(allocator, '\r'),
+                '"' => try out.append(allocator, '"'),
+                '\\' => try out.append(allocator, '\\'),
+                else => return error.InvalidMetadataField,
+            }
+        } else {
+            if (c == '"' or c == '\n' or c == '\r' or c < 0x20 or c == 0x7f) return error.InvalidMetadataField;
+            try out.append(allocator, c);
+        }
+    }
+
+    const value = try out.toOwnedSlice(allocator);
+    errdefer allocator.free(value);
+    if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidMetadataField;
+    return value;
 }
 
 fn parseLine(allocator: std.mem.Allocator, line: []const u8) !Binding {
@@ -517,6 +565,104 @@ test "parseInto accepts empty V1 TOML lockfile" {
 
     try parseInto(allocator, "version = 1\n# comment only\n", &bindings);
     try std.testing.expectEqual(@as(usize, 0), bindings.items.len);
+}
+
+test "parseInto decodes TOML basic-string escapes" {
+    const allocator = std.testing.allocator;
+    const content =
+        "version = 1\n" ++
+        "[[bindings]]\n" ++
+        "doc = \"docs/quote\\\"slash\\\\tab\\t.md\"\n" ++
+        "target = \"src/line\\ncarriage\\r.ts\"\n" ++
+        "note = \"backspace\\bformfeed\\f\"\n";
+
+    var bindings: std.ArrayList(Binding) = .empty;
+    defer {
+        for (bindings.items) |*binding| {
+            allocator.free(binding.doc_path);
+            allocator.free(binding.target);
+            for (binding.metadata.items) |field| {
+                allocator.free(field.key);
+                allocator.free(field.value);
+            }
+            binding.metadata.deinit(allocator);
+        }
+        bindings.deinit(allocator);
+    }
+
+    try parseInto(allocator, content, &bindings);
+    try std.testing.expectEqual(@as(usize, 1), bindings.items.len);
+    try std.testing.expectEqualStrings("docs/quote\"slash\\tab\t.md", bindings.items[0].doc_path);
+    try std.testing.expectEqualStrings("src/line\ncarriage\r.ts", bindings.items[0].target);
+    try std.testing.expectEqualStrings("backspace\x08formfeed\x0c", bindings.items[0].fieldValue("note").?);
+}
+
+test "parseInto rejects TOML edge cases outside the lockfile subset" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_][]const u8{
+        "[[bindings]]\ndoc = \"docs/a.md\"\ntarget = \"src/a.ts\"\n", // version is mandatory for TOML lockfiles
+        "version = 2\n", // unsupported version
+        "version = 1 # inline comment\n", // inline comments are outside the subset
+        "version = 1\nname = \"drift\"\n", // no unknown top-level keys
+        "version = 1\n[[bindings]]\ndoc = \"a\"\ndoc = \"b\"\ntarget = \"t\"\n", // duplicate doc
+        "version = 1\n[[bindings]]\ndoc = \"a\"\ntarget = \"t\"\nsig = \"a\"\nsig = \"b\"\n", // duplicate metadata
+        "version = 1\n[[bindings]]\ndoc = \"a\"\ntarget = \"t\"\nbad.key = \"x\"\n", // dotted keys
+        "version = 1\n[[bindings]]\ndoc = \"a\"\ntarget = \"t\"\nversion = \"1\"\n", // version is top-level only
+        "version = 1\n[[bindings]]\ndoc = \"a\"\ntarget = \"unterminated\n", // malformed string
+        "version = 1\n[[bindings]]\ndoc = \"a\"\ntarget = \"bad\\u1234\"\n", // unicode escapes not supported yet
+    };
+
+    for (cases) |content| {
+        var bindings: std.ArrayList(Binding) = .empty;
+        defer bindings.deinit(allocator);
+
+        parseInto(allocator, content, &bindings) catch |err| switch (err) {
+            error.InvalidBindingLine, error.InvalidMetadataField, error.UnsupportedLockfileVersion => continue,
+            else => return err,
+        };
+        return error.TestExpectedError;
+    }
+}
+
+test "serialize escapes TOML basic strings" {
+    const allocator = std.testing.allocator;
+
+    var metadata: std.ArrayList(MetadataField) = .empty;
+    defer {
+        for (metadata.items) |field| {
+            allocator.free(field.key);
+            allocator.free(field.value);
+        }
+        metadata.deinit(allocator);
+    }
+    try metadata.append(allocator, .{
+        .key = try allocator.dupe(u8, "note"),
+        .value = try allocator.dupe(u8, "quote\" slash\\ tab\t line\n carriage\r"),
+    });
+
+    var bindings = [_]Binding{.{
+        .doc_path = try allocator.dupe(u8, "docs/quote\".md"),
+        .target = try allocator.dupe(u8, "src/slash\\.ts"),
+        .metadata = metadata,
+    }};
+    defer {
+        allocator.free(bindings[0].doc_path);
+        allocator.free(bindings[0].target);
+    }
+
+    const content = try serialize(allocator, &bindings);
+    defer allocator.free(content);
+
+    try std.testing.expectEqualStrings(
+        "version = 1\n" ++
+            "\n" ++
+            "[[bindings]]\n" ++
+            "doc = \"docs/quote\\\".md\"\n" ++
+            "target = \"src/slash\\\\.ts\"\n" ++
+            "note = \"quote\\\" slash\\\\ tab\\t line\\n carriage\\r\"\n",
+        content,
+    );
 }
 
 test "serialize sorts tables and appends trailing newline" {

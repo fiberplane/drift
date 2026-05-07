@@ -55,7 +55,7 @@ sig = "82d9da38ea486f36"
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/lockfile.zig"
-sig = "4900822676fbf9ac"
+sig = "55bc77a2853cb654"
 
 [[bindings]]
 doc = "docs/DESIGN.md"

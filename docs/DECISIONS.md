@@ -101,7 +101,7 @@ sig = "a1b2c3d4e5f6a7b8"
 
 The TOML format replaced the original one-line `<doc> -> <target> <key:value>...` format after property tests showed it substantially reduces spurious merge conflicts on disjoint edits while remaining parseable by standard TOML tools. Bindings are serialized canonically with metadata fields sorted by key and blocks sorted by `(doc, target)` (with metadata as a deterministic tie-breaker for duplicate bindings).
 
-Parser rules intentionally stay small and forward-compatible: blank lines and `#` comments are ignored, block order is not significant on read, and strings currently use an unescaped basic-string subset. The reader can still import the legacy line format so existing lockfiles are upgraded to TOML on the next write.
+Parser rules intentionally stay small and lockfile-specific: `version = 1` is mandatory for TOML lockfiles; blank lines and full-line `#` comments are ignored; block order is not significant on read; keys are bare `[A-Za-z0-9_-]+`; and values use single-line TOML basic strings with the common escapes (`\\b`, `\\t`, `\\n`, `\\f`, `\\r`, `\\\"`, `\\\\`). General TOML features such as inline comments, dotted keys, multiline strings, arbitrary top-level keys, and non-`bindings` tables are rejected. The reader can still import the legacy line format so existing lockfiles are upgraded to TOML on the next write.
 
 ## 12. Arena-oriented memory management
 
