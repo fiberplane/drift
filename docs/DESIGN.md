@@ -18,30 +18,45 @@ During `drift lint`, each doc is also parsed to extract markdown links. Any rela
 
 ### Anchors
 
-An anchor is a declared relationship between a doc and a code artifact. Anchors are stored as lines in `drift.lock`, not in the doc files.
+An anchor is a declared relationship between a doc and a code artifact. Anchors are stored as TOML `[[bindings]]` tables in `drift.lock`, not in the doc files.
 
+```toml
+version = 1
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/login.ts"
+sig = "e4f8a2c10b3d7890"
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/provider.ts#AuthConfig"
+sig = "1a2b3c4d5e6f7890"
 ```
-docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890
-docs/auth.md -> src/auth/provider.ts#AuthConfig sig:1a2b3c4d5e6f7890
-```
 
-Each line is a binding: a doc path, an arrow separator, a target path (optionally with `#Symbol`), and trailing key:value metadata. The `sig:` field records a content signature — a normalized fingerprint of the target at the time the anchor was last verified.
+Each table is a binding: a doc path, a target path (optionally with `#Symbol`), and metadata fields. The `sig` field records a content signature — a normalized fingerprint of the target at the time the anchor was last verified.
 
-Anchors can be file-level (`src/auth/login.ts`) or symbol-level (`src/auth/provider.ts#AuthConfig`). Bare targets without a `sig:` field are valid — they declare a binding without provenance.
+Anchors can be file-level (`src/auth/login.ts`) or symbol-level (`src/auth/provider.ts#AuthConfig`). Bare targets without a `sig` field are valid — they declare a binding without provenance.
 
-`drift link` produces `sig:` provenance by default. Content signatures are VCS-independent — they encode a fingerprint of the code itself, so staleness detection works without querying git history.
+`drift link` produces `sig` provenance by default. Content signatures are VCS-independent — they encode a fingerprint of the code itself, so staleness detection works without querying git history.
 
 ### Origin-Qualified Anchors
 
-An anchor can carry an `origin:` field to declare which repository it belongs to:
+An anchor can carry an `origin` field to declare which repository it belongs to:
 
+```toml
+version = 1
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/login.ts"
+origin = "github:fiberplane/drift"
+sig = "e4f8a2c10b3d7890"
 ```
-docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890 origin:github:fiberplane/drift
-```
 
-When `drift lint` runs, it resolves the current repo's identity from `git remote get-url origin` and normalizes it to `github:owner/repo` format. If an anchor's `origin:` doesn't match the current repo, it is reported as `SKIP` — it belongs to a different repository and can't be checked locally.
+When `drift lint` runs, it resolves the current repo's identity from `git remote get-url origin` and normalizes it to `github:owner/repo` format. If an anchor's `origin` doesn't match the current repo, it is reported as `SKIP` — it belongs to a different repository and can't be checked locally.
 
-This lets docs travel across repo boundaries (vendored docs, shared skill files, monorepo imports) without producing false STALE reports. Anchors without an `origin:` field are always checked — origin qualification is opt-in.
+This lets docs travel across repo boundaries (vendored docs, shared skill files, monorepo imports) without producing false STALE reports. Anchors without an `origin` field are always checked — origin qualification is opt-in.
 
 ### Symbol-Level Anchors
 
@@ -80,21 +95,21 @@ Broken link detection uses the same tree-sitter parse that doc-to-doc anchor res
 
 ## Staleness Detection
 
-Provenance is per-anchor: each anchor's `sig:` field in the lockfile records when the anchor was last verified.
+Provenance is per-anchor: each anchor's `sig` field in the lockfile records when the anchor was last verified.
 
-### Content signatures (`sig:`) — primary format
+### Content signatures (`sig`) — primary format
 
-`drift link` computes a normalized syntax fingerprint of each anchor's target and stores it as a 16-character hex string in the lockfile: `docs/auth.md -> src/auth/login.ts sig:a1b2c3d4e5f6a7b8`. At lint time, drift recomputes the fingerprint from the current file on disk and compares it to the stored value. If they match the anchor is fresh; if they differ it is stale.
+`drift link` computes a normalized syntax fingerprint of each anchor's target and stores it as a 16-character hex string in the lockfile's `sig` field. At lint time, drift recomputes the fingerprint from the current file on disk and compares it to the stored value. If they match the anchor is fresh; if they differ it is stale.
 
 Content signatures are VCS-independent — they work in fresh clones, shallow clones, and detached-HEAD states without querying git history. For supported tree-sitter languages, the fingerprint is based on the normalized syntax tree so formatting-only changes do not trigger staleness.
 
 ### Detection algorithm
 
 1. Read `drift.lock` to get all bindings
-2. For each anchor, extract its `sig:` value
+2. For each anchor, extract its `sig` value
 3. Recompute the fingerprint from the current file on disk
 4. Compare — if they differ, the anchor is stale
-5. If no `sig:` field — the anchor has no provenance, report as stale
+5. If no `sig` field — the anchor has no provenance, report as stale
 
 File reads are cached per lint run (`FileCache` in `main.zig`). When multiple anchors reference the same file, the content is read once.
 
@@ -167,7 +182,7 @@ docs/auth.md
 Every command creates two arena allocators backed by the GPA in `main()`. The **run arena** owns command-lifetime data (lockfile, file cache, result model). The **scratch arena** owns per-item temporaries (path resolution, subprocess output) and is reset between loop iterations. Fixed-width formatting uses stack buffers. Only OS/C resources (child processes, tree-sitter parsers) need explicit `deinit()`. See Decision 12 in `DECISIONS.md` for the full ruleset.
 
 Additional modules:
-- `lockfile.zig` — read, write, and query `drift.lock` bindings; line-oriented parser and serializer
+- `lockfile.zig` — read, write, and query `drift.lock` bindings; TOML parser and serializer
 - `markdown.zig` — markdown parsing via tree-sitter (block + inline grammars): link extraction, heading resolution, section fingerprinting
 - `main.zig` — CLI entry point, argument parsing, subcommand dispatch
 - `commands/lint.zig` — lint engine: file/content caching, anchor staleness checks, report formatting
@@ -178,7 +193,7 @@ Additional modules:
 
 ### lockfile.zig
 
-Reads and writes `drift.lock`. The file is line-oriented: each non-blank, non-comment line is a binding in the format `<doc> -> <target> <key:value>...`. Parsing is two splits: `splitSequence(" -> ")` for the doc/rest boundary, then `splitScalar(' ')` for target and trailing key:value pairs. Writing canonicalizes each binding before output: metadata fields are sorted by key, then all rendered lines are sorted lexically and written with a trailing newline.
+Reads and writes `drift.lock`. The on-disk format is TOML array-of-tables: each `[[bindings]]` block contains `doc`, `target`, and metadata keys such as `sig` and `origin`. Parsing skips blank lines and comments, accepts bindings in any order, and also imports the legacy line format for upgrade-on-write compatibility. Writing canonicalizes each binding before output: metadata fields are sorted by key, then blocks are sorted by doc/target and separated by one blank line.
 
 Discovery: walks up from cwd checking for `drift.lock` at each directory. The lockfile's directory becomes the project root for resolving relative paths.
 
@@ -207,22 +222,31 @@ No libgit2, no jj library. `GitCatFile` keeps a single `git cat-file --batch` pr
 
 ### drift.lock
 
-The lockfile is a flat, line-oriented file at the repo root. Every binding between a doc and a code target is one line.
+The lockfile is a TOML file at the repo root. Every binding between a doc and a code target is one `[[bindings]]` table.
 
-```
+```toml
 # drift.lock — managed by drift, do not edit manually
-docs/auth.md -> src/auth/login.ts sig:e4f8a2c10b3d7890
-docs/auth.md -> src/auth/provider.ts#AuthConfig sig:1a2b3c4d5e6f7890 origin:github:fiberplane/drift
-docs/overview.md -> docs/auth.md#Authentication sig:b3c4d5e6f7a8b9c0
-docs/payments.md -> src/payments/stripe.ts sig:9a8b7c6d5e4f3210
+version = 1
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/login.ts"
+sig = "e4f8a2c10b3d7890"
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/provider.ts#AuthConfig"
+origin = "github:fiberplane/drift"
+sig = "1a2b3c4d5e6f7890"
 ```
 
 Format rules:
-- One binding per line: `<doc> -> <target> <key:value>...`
-- Sorted lexically by full line content
-- Trailing key:value pairs for extensible metadata (`sig:`, `origin:`, future fields)
+- `version = 1` declares the lockfile schema version
+- One binding per `[[bindings]]` block with `doc`, `target`, and metadata string fields
+- Blocks sorted by `(doc, target)` with deterministic tie-breaking for duplicate bindings
 - Metadata fields are serialized in key order so semantically equivalent bindings produce identical bytes
-- Lines starting with `#` are comments, blank lines ignored
+- Values are single-line TOML basic strings; drift escapes `\\b`, `\\t`, `\\n`, `\\f`, `\\r`, `\\\"`, and `\\\\`
+- Lines starting with `#` are comments, blank lines ignored; inline comments and general TOML tables are outside the lockfile subset
 - Discovery: walk up from cwd until `drift.lock` is found
 
 ### .drift/config.yaml

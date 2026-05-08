@@ -1,19 +1,98 @@
-.claude/skills/drift/SKILL.md -> src/main.zig origin:github:fiberplane/drift sig:b6166454e541e8a4
-.claude/skills/drift/SKILL.md -> src/vcs.zig origin:github:fiberplane/drift sig:84da70be235ca9d4
-CLAUDE.md -> build.zig sig:2dccb33f6b790afa
-CLAUDE.md -> src/main.zig sig:b6166454e541e8a4
-docs/CLI.md -> src/commands/link.zig sig:7bd7f824afc30e0b
-docs/CLI.md -> src/commands/lint.zig sig:fe7bd5a687f3e917
-docs/CLI.md -> src/commands/refs.zig sig:f623b7774086094e
-docs/CLI.md -> src/commands/status.zig sig:eade166d24a20b81
-docs/CLI.md -> src/commands/unlink.zig sig:0dbe1ee3315211b5
-docs/DESIGN.md -> src/context.zig sig:82d9da38ea486f36
-docs/DESIGN.md -> src/lockfile.zig sig:6fc5c159297244d1
-docs/DESIGN.md -> src/main.zig sig:b6166454e541e8a4
-docs/DESIGN.md -> src/symbols.zig sig:bbe250d43609daa1
-docs/DESIGN.md -> src/vcs.zig sig:84da70be235ca9d4
-docs/RELEASING.md -> .github/workflows/ci.yml sig:c14a23e6547d575f
-docs/RELEASING.md -> .github/workflows/release.yml sig:19b334776bec1eda
-docs/RELEASING.md -> cliff.toml sig:d2a8e301fe4b788e
-docs/check-json-schema.md -> docs/schemas/drift.check.v1.json sig:4e6d23b9945aebb1
-docs/check-json-schema.md -> src/payload/drift_check_v1.zig sig:c80e398e38ece09d
+version = 1
+
+[[bindings]]
+doc = ".claude/skills/drift/SKILL.md"
+target = "src/main.zig"
+origin = "github:fiberplane/drift"
+sig = "0e63465cf6539ff3"
+
+[[bindings]]
+doc = ".claude/skills/drift/SKILL.md"
+target = "src/vcs.zig"
+origin = "github:fiberplane/drift"
+sig = "84da70be235ca9d4"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "build.zig"
+sig = "2dccb33f6b790afa"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "src/main.zig"
+sig = "0e63465cf6539ff3"
+
+[[bindings]]
+doc = "docs/CLI.md"
+target = "src/commands/link.zig"
+sig = "7bd7f824afc30e0b"
+
+[[bindings]]
+doc = "docs/CLI.md"
+target = "src/commands/lint.zig"
+sig = "fe7bd5a687f3e917"
+
+[[bindings]]
+doc = "docs/CLI.md"
+target = "src/commands/refs.zig"
+sig = "f623b7774086094e"
+
+[[bindings]]
+doc = "docs/CLI.md"
+target = "src/commands/status.zig"
+sig = "eade166d24a20b81"
+
+[[bindings]]
+doc = "docs/CLI.md"
+target = "src/commands/unlink.zig"
+sig = "0dbe1ee3315211b5"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/context.zig"
+sig = "82d9da38ea486f36"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/lockfile.zig"
+sig = "55bc77a2853cb654"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/main.zig"
+sig = "0e63465cf6539ff3"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/symbols.zig"
+sig = "bbe250d43609daa1"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/vcs.zig"
+sig = "84da70be235ca9d4"
+
+[[bindings]]
+doc = "docs/RELEASING.md"
+target = ".github/workflows/ci.yml"
+sig = "c14a23e6547d575f"
+
+[[bindings]]
+doc = "docs/RELEASING.md"
+target = ".github/workflows/release.yml"
+sig = "19b334776bec1eda"
+
+[[bindings]]
+doc = "docs/RELEASING.md"
+target = "cliff.toml"
+sig = "d2a8e301fe4b788e"
+
+[[bindings]]
+doc = "docs/check-json-schema.md"
+target = "docs/schemas/drift.check.v1.json"
+sig = "4e6d23b9945aebb1"
+
+[[bindings]]
+doc = "docs/check-json-schema.md"
+target = "src/payload/drift_check_v1.zig"
+sig = "c80e398e38ece09d"

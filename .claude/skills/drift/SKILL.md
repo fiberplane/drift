@@ -97,15 +97,28 @@ Someone changed bound code without updating docs. Read the lint output to see wh
 ## Anchor syntax
 
 Bindings in `drift.lock`:
-```
-docs/auth.md -> src/auth/login.ts sig:a1b2c3d4e5f6a7b8
-docs/auth.md -> src/auth/provider.ts#AuthConfig sig:c3d4e5f6a7b8a1b2
-docs/overview.md -> docs/auth.md#authentication sig:b3c4d5e6f7a8b9c0
+```toml
+version = 1
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/login.ts"
+sig = "a1b2c3d4e5f6a7b8"
+
+[[bindings]]
+doc = "docs/auth.md"
+target = "src/auth/provider.ts#AuthConfig"
+sig = "c3d4e5f6a7b8a1b2"
+
+[[bindings]]
+doc = "docs/overview.md"
+target = "docs/auth.md#authentication"
+sig = "b3c4d5e6f7a8b9c0"
 ```
 
 Anchors can target code files, code symbols (`file#Symbol`), or doc headings (`doc.md#heading-slug`). Heading fragments use GitHub-style slugs (lowercase, hyphens).
 
-`drift link` writes bindings to `drift.lock` with content signatures (`sig:<hex>`). Content signatures are AST fingerprints of the target, so staleness detection works without querying VCS history. This means `drift link` works on uncommitted files — no need to commit first.
+`drift link` writes bindings to `drift.lock` with content signatures (`sig = "<hex>"`). Content signatures are AST fingerprints of the target, so staleness detection works without querying VCS history. This means `drift link` works on uncommitted files — no need to commit first.
 
 When relinking a stale anchor, `drift link` refuses and prints both sides (doc section and current code) so you can review the change. Pass `--doc-is-still-accurate` to confirm the doc doesn't need updates.
 
@@ -113,10 +126,16 @@ When relinking a stale anchor, `drift link` refuses and prints both sides (doc s
 
 ## Cross-repo docs (origin)
 
-Docs installed from other repos (like this skill) carry `origin:` on their bindings in `drift.lock` so `drift check` skips their anchors in consumer repos. If you're writing a doc that will be distributed to other repos, add origin to prevent false positives:
+Docs installed from other repos (like this skill) carry `origin` on their bindings in `drift.lock` so `drift check` skips their anchors in consumer repos. If you're writing a doc that will be distributed to other repos, add origin to prevent false positives:
 
-```
-docs/skill.md -> src/main.ts sig:a1b2c3d4e5f6a7b8 origin:github:your-org/your-repo
+```toml
+version = 1
+
+[[bindings]]
+doc = "docs/skill.md"
+target = "src/main.ts"
+origin = "github:your-org/your-repo"
+sig = "a1b2c3d4e5f6a7b8"
 ```
 
 ## Staleness

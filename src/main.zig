@@ -343,6 +343,7 @@ fn exitWithError(stderr_w: *std.Io.Writer, err: anyerror) noreturn {
     const message: []const u8 = switch (err) {
         error.InvalidBindingLine => "malformed binding in drift.lock",
         error.InvalidMetadataField => "malformed metadata field in drift.lock",
+        error.UnsupportedLockfileVersion => "unsupported drift.lock version",
         error.OutOfMemory => "out of memory",
         else => @errorName(err),
     };
