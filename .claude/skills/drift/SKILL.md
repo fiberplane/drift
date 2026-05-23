@@ -13,7 +13,7 @@ When you change code without updating the docs that describe it, those docs beco
 
 ## Relink gate
 
-`drift link` refuses to restamp a stale anchor without explicit review. When a target's signature has drifted, `drift link` prints both sides — the doc section (spec) and the current code — then exits 1.
+`drift link` refuses to restamp a stale anchor without explicit review. When a target's signature has drifted, `drift link` prints the relevant doc section and, for symbol or markdown-heading anchors, current target context. In non-TTY runs it exits 1; in TTY runs it can prompt for confirmation.
 
 This means you cannot blindly relink. You must review the doc prose and confirm it is still accurate. Use:
 
@@ -23,10 +23,11 @@ drift link docs/auth.md --doc-is-still-accurate
 
 ## After you change code
 
-Find which docs reference the files you touched:
+Find which docs reference an exact target you touched:
 
 ```bash
 drift refs src/auth/login.ts
+drift refs src/auth/provider.ts#AuthConfig
 ```
 
 Or check all docs at once:
@@ -36,8 +37,8 @@ drift check
 ```
 
 If a doc is stale because of your change:
-1. Run `drift link <doc-path>` — it will print the doc section and current code side by side, then refuse
-2. Read both sides to understand what's out of sync
+1. Run `drift link <doc-path>` — it will print review context, then refuse
+2. Read the doc section and any printed target context to understand what's out of sync
 3. Update the doc's prose to reflect what you changed
 4. Run `drift link <doc-path> --doc-is-still-accurate` — succeeds now that you've reviewed
 5. Verify: `drift check`
@@ -52,7 +53,7 @@ Refresh all anchors in the doc to snapshot current state:
 drift link docs/my-doc.md
 ```
 
-This updates provenance on all bindings in `drift.lock` for that doc, including inline `@./` references.
+This updates provenance on all existing bindings in `drift.lock` for that doc. Current `drift link <doc-path>` blanket mode does not discover or add inline `@./` references from the doc body; add any new target explicitly with `drift link <doc-path> <target>`.
 
 ## When you create new code
 
@@ -118,11 +119,11 @@ sig = "b3c4d5e6f7a8b9c0"
 
 Anchors can target code files, code symbols (`file#Symbol`), or doc headings (`doc.md#heading-slug`). Heading fragments use GitHub-style slugs (lowercase, hyphens).
 
-`drift link` writes bindings to `drift.lock` with content signatures (`sig = "<hex>"`). Content signatures are AST fingerprints of the target, so staleness detection works without querying VCS history. This means `drift link` works on uncommitted files — no need to commit first.
+`drift link` writes bindings to `drift.lock` with content signatures (`sig = "<hex>"`). Content signatures are syntax-aware fingerprints for supported languages and raw-content fingerprints for unsupported whole-file anchors; unsupported symbol anchors cannot be fingerprinted. Staleness detection works without querying VCS history, so `drift link` works on uncommitted files — no need to commit first.
 
-When relinking a stale anchor, `drift link` refuses and prints both sides (doc section and current code) so you can review the change. Pass `--doc-is-still-accurate` to confirm the doc doesn't need updates.
+When relinking a stale anchor, `drift link` refuses and prints review context so you can inspect the change. Pass `--doc-is-still-accurate` to confirm the doc doesn't need updates.
 
-`drift lint` also checks all markdown links (`[text](path.md)`) in drift-managed docs for existence — broken links are reported as `BROKEN` without needing a lockfile entry.
+`drift lint` also checks markdown links (`[text](path.md)`) in discovered markdown docs under the lockfile root for existence — broken links are reported as `BROKEN` without needing a lockfile entry.
 
 ## Cross-repo docs (origin)
 
@@ -140,13 +141,18 @@ sig = "a1b2c3d4e5f6a7b8"
 
 ## Staleness
 
-`drift check` reads bindings from `drift.lock` and exits 1 if any anchor is stale. Use `drift check --changed <path>` to scope checking to docs whose targets match a given path prefix — useful in CI when you know which files changed. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won’t trigger staleness. Stale reports include git blame-style context (who last touched the line of interest, which commit, subject) so you can see what changed.
+`drift check` reads bindings from `drift.lock` and exits 1 if any anchor is stale or markdown link is broken. Use `drift check --changed <path>` to scope checking to affected docs — useful in CI when you know which files changed. For supported languages (TypeScript-family files including TS/TSX/JS/JSX, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won’t trigger staleness. For changed anchors, stale reports include best-effort git context for the target file (author, commit, committer date, subject) so you can see what changed.
 
 For `--format json`, the payload is `schema_version: drift.check.v1` (see the repo’s `docs/check-json-schema.md`). There, `blame.date` is the **committer** date in ISO 8601 strict form, not author date — use it when you need a stable time ordering after rebases. The summary includes `verification_state` (`none` | `partial` | `full`) describing how many docs were actually checked versus skipped (e.g. origin mismatch).
 
-Reasons:
+Common reasons:
 - **changed after doc** — file/symbol content differs from provenance snapshot
 - **file not found** — bound file no longer exists
+- **file not readable** — bound file exists but cannot be read
 - **symbol not found** — bound symbol no longer exists in the file
+- **fingerprint unavailable** — drift could not compute a target fingerprint
+- **baseline unavailable** — the binding has no usable provenance
+- **origin mismatch** — the binding belongs to another repo and is skipped
+- **link target not found** — a markdown link points to a missing file
 
 `drift lint` is an alias for `drift check`.
