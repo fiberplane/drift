@@ -250,7 +250,7 @@ pub fn main(init: std.process.Init) !void {
                     fatal(&stderr_w.interface, "", .{});
                 },
                 error.CannotComputeFingerprint => {
-                    fatal(&stderr_w.interface, "error: cannot compute fingerprint for anchor in '{s}'\n", .{doc_path});
+                    fatal(&stderr_w.interface, "", .{});
                 },
                 error.DocUnchanged => {
                     fatal(&stderr_w.interface, "", .{});

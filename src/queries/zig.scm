@@ -1,8 +1,7 @@
-; Symbol declarations in Zig
+; Symbol declarations in Zig (tree-sitter-grammars/tree-sitter-zig node names)
 [
-  (TopLevelDecl
-    (FnDecl
-      (IDENTIFIER) @name)) @definition
-  (VarDecl
-    (IDENTIFIER) @name) @definition
+  (function_declaration
+    name: (identifier) @name) @definition
+  (variable_declaration
+    . (identifier) @name) @definition
 ]
