@@ -217,6 +217,48 @@ test "fingerprintFileSyntax works for zig source" {
     try std.testing.expect(fp != null);
 }
 
+test "symbol queries compile for every supported language" {
+    const extensions = [_][]const u8{ ".ts", ".py", ".rs", ".go", ".zig", ".java" };
+    for (extensions) |ext| {
+        const lang_query = languageForExtension(ext) orelse return error.TestUnexpectedResult;
+        var error_offset: u32 = 0;
+        const query = ts.Query.create(lang_query.language, lang_query.query_source, &error_offset) catch {
+            std.debug.print("symbol query for '{s}' failed to compile at byte offset {d}\n", .{ ext, error_offset });
+            return error.TestUnexpectedResult;
+        };
+        query.destroy();
+    }
+}
+
+test "fingerprintSymbolSyntax resolves zig fn and const declarations" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\pub const RepoMap = struct {
+        \\    entries: u32,
+        \\};
+        \\
+        \\pub fn parseSpec(spec: []const u8) void {
+        \\    _ = spec;
+        \\}
+        \\
+    ;
+    const lang_query = languageForExtension(".zig") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(fingerprintSymbolSyntax(source, lang_query, "parseSpec") != null);
+    try std.testing.expect(fingerprintSymbolSyntax(source, lang_query, "RepoMap") != null);
+    try std.testing.expect(fingerprintSymbolSyntax(source, lang_query, "missing") == null);
+}
+
+test "zig variable_declaration query matches only the declared name, not the initializer" {
+    const source =
+        \\const alias = imported_name;
+        \\
+    ;
+    const lang_query = languageForExtension(".zig") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(fingerprintSymbolSyntax(source, lang_query, "alias") != null);
+    try std.testing.expect(fingerprintSymbolSyntax(source, lang_query, "imported_name") == null);
+}
+
 test "computeFingerprint matches for real zig files" {
     const allocator = std.testing.allocator;
 

@@ -4,7 +4,7 @@ version = 1
 doc = ".claude/skills/drift/SKILL.md"
 target = "src/main.zig"
 origin = "github:fiberplane/drift"
-sig = "0e63465cf6539ff3"
+sig = "3faa73e2bb344a79"
 
 [[bindings]]
 doc = ".claude/skills/drift/SKILL.md"
@@ -20,12 +20,12 @@ sig = "2dccb33f6b790afa"
 [[bindings]]
 doc = "CLAUDE.md"
 target = "src/main.zig"
-sig = "0e63465cf6539ff3"
+sig = "3faa73e2bb344a79"
 
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/link.zig"
-sig = "7bd7f824afc30e0b"
+sig = "3ae8f4ee2c85d8d8"
 
 [[bindings]]
 doc = "docs/CLI.md"
@@ -60,17 +60,27 @@ sig = "55bc77a2853cb654"
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/main.zig"
-sig = "0e63465cf6539ff3"
+sig = "3faa73e2bb344a79"
 
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/symbols.zig"
-sig = "bbe250d43609daa1"
+sig = "772dd9e7e974468e"
 
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/vcs.zig"
 sig = "84da70be235ca9d4"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/vcs.zig#GitCatFile"
+sig = "c61b49f799a878de"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/vcs.zig#getRepoIdentity"
+sig = "7d0fe37e5eff5e30"
 
 [[bindings]]
 doc = "docs/RELEASING.md"

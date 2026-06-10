@@ -49,7 +49,13 @@ pub fn run(
         const existing_binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target);
         const old_sig = if (existing_binding) |b| b.fieldValue("sig") else null;
 
-        try upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target);
+        upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target) catch |err| switch (err) {
+            error.CannotComputeFingerprint => {
+                stderr_w.print("error: cannot compute fingerprint for target: {s}\n", .{raw_anchor}) catch {};
+                return err;
+            },
+            else => return err,
+        };
 
         const binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target).?;
         if (isDocGateBlocked(binding, old_sig, doc_is_still_accurate)) {
@@ -73,7 +79,13 @@ pub fn run(
     for (lf.bindings.items) |*binding| {
         if (!std.mem.eql(u8, binding.doc_path, normalized_doc_path)) continue;
         const old_sig = binding.fieldValue("sig");
-        try refreshBindingSig(ctx, cwd_path, lf.root_path, binding);
+        refreshBindingSig(ctx, cwd_path, lf.root_path, binding) catch |err| switch (err) {
+            error.CannotComputeFingerprint => {
+                stderr_w.print("error: cannot compute fingerprint for target: {s}\n", .{binding.target}) catch {};
+                return err;
+            },
+            else => return err,
+        };
 
         if (isDocGateBlocked(binding, old_sig, doc_is_still_accurate)) {
             refused_count += 1;
