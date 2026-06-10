@@ -972,6 +972,102 @@ test "check --repo reports mapped_repo_missing when the mapped path does not exi
     try std.testing.expectEqualStrings("mapped_repo_missing", parsed.value.docs[0].anchors[0].reason.?.code);
 }
 
+test "check resolves foreign-origin anchors via [[repos]] in .drift/config.toml" {
+    const allocator = std.testing.allocator;
+    var pair = try ForeignRepoPair.init(allocator);
+    defer pair.cleanup();
+
+    // Map the origin via config with a path relative to the lockfile root.
+    const relative_server = try std.Io.Dir.path.relative(allocator, "", null, pair.local.abs_path, pair.server.abs_path);
+    defer allocator.free(relative_server);
+
+    const config_content = try std.fmt.allocPrint(
+        allocator,
+        "version = 1\n\n[[repos]]\norigin = \"" ++ foreign_origin ++ "\"\npath = \"{s}\"\n",
+        .{relative_server},
+    );
+    defer allocator.free(config_content);
+    try pair.local.writeFile(".drift/config.toml", config_content);
+
+    // No --repo flag, and cwd is a subdirectory: the config path must resolve
+    // against the lockfile root, not the cwd, or the mapping breaks here.
+    {
+        const result = try pair.local.runDriftFromSubdir("docs", &.{"check"});
+        defer result.deinit(allocator);
+
+        try helpers.expectExitCode(result.term, 0);
+        try helpers.expectContains(result.stdout, "ok");
+        try helpers.expectNotContains(result.stdout, "SKIP");
+        try helpers.expectNotContains(result.stdout, "STALE");
+    }
+
+    // Server file drifts: the config-mapped anchor goes stale.
+    try pair.server.writeFile("src/server.ts", "export function handle() { return 2; }\n");
+    try pair.server.commit("change server handler");
+
+    {
+        const result = try pair.local.runDrift(&.{"check"});
+        defer result.deinit(allocator);
+
+        try helpers.expectExitCode(result.term, 1);
+        try helpers.expectContains(result.stdout, "STALE");
+        try helpers.expectContains(result.stdout, "changed after doc");
+    }
+}
+
+test "check --repo overrides a [[repos]] config mapping for the same origin" {
+    const allocator = std.testing.allocator;
+    var pair = try ForeignRepoPair.init(allocator);
+    defer pair.cleanup();
+
+    // Config maps the origin to a wrong (nonexistent) checkout path.
+    try pair.local.writeFile(
+        ".drift/config.toml",
+        "version = 1\n\n[[repos]]\norigin = \"" ++ foreign_origin ++ "\"\npath = \"no-such-checkout\"\n",
+    );
+
+    // Without the flag the wrong config mapping is used: skip, repo missing.
+    {
+        const result = try pair.local.runDrift(&.{"check"});
+        defer result.deinit(allocator);
+
+        try helpers.expectExitCode(result.term, 0);
+        try helpers.expectContains(result.stdout, "SKIP");
+        try helpers.expectContains(result.stdout, "mapped repo missing");
+    }
+
+    // The flag overrides the config entry for the same origin: anchor checks.
+    const spec = try pair.repoSpec(allocator);
+    defer allocator.free(spec);
+
+    {
+        const result = try pair.local.runDrift(&.{ "check", "--repo", spec });
+        defer result.deinit(allocator);
+
+        try helpers.expectExitCode(result.term, 0);
+        try helpers.expectContains(result.stdout, "ok");
+        try helpers.expectNotContains(result.stdout, "SKIP");
+        try helpers.expectNotContains(result.stdout, "STALE");
+    }
+}
+
+test "check fails with a config diagnostic when [[repos]] is malformed" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile(".drift/config.toml", "version = 1\n\n[[repos]]\npath = \"../server\"\n");
+    try repo.commit("add doc and malformed config");
+
+    const result = try repo.runDrift(&.{"check"});
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.exitCode() != 0);
+    try helpers.expectContains(result.stderr, ".drift/config.toml:3");
+    try helpers.expectContains(result.stderr, "[[repos]]");
+}
+
 test "check --repo rejects malformed specs with a usage error" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);

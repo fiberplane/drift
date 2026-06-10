@@ -139,6 +139,24 @@ origin = "github:your-org/your-repo"
 sig = "a1b2c3d4e5f6a7b8"
 ```
 
+A consumer repo with a local checkout of the origin repo can map it and have those anchors actually checked instead of skipped — against the sibling checkout's files, with blame from its history:
+
+```bash
+drift check --repo github:your-org/your-repo=../your-repo
+```
+
+Or persistently in `.drift/config.toml` (flag wins over config for the same origin):
+
+```toml
+version = 1
+
+[[repos]]
+origin = "github:your-org/your-repo"
+path = "../your-repo"
+```
+
+If a mapped path doesn't exist on disk, the anchor is skipped with reason `mapped repo missing` rather than failing the check.
+
 ## Staleness
 
 `drift check` reads bindings from `drift.lock` and exits 1 if any anchor is stale or markdown link is broken. Use `drift check --changed <path>` to scope checking to affected docs — useful in CI when you know which files changed. For supported languages (TypeScript-family files including TS/TSX/JS/JSX, Python, Rust, Go, Zig, Java), comparison is syntax-aware — formatting-only changes won’t trigger staleness. For changed anchors, stale reports include best-effort git context for the target file (author, commit, committer date, subject) so you can see what changed.

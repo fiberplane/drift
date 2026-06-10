@@ -2,6 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const drift_check_v1 = @import("payload");
 const CommandContext = @import("../context.zig").CommandContext;
+const Config = @import("../Config.zig");
 const lockfile = @import("../lockfile.zig");
 const markdown = @import("../markdown.zig");
 const repo_map = @import("../repo_map.zig");
@@ -206,23 +207,37 @@ pub fn compute(
 ) !CheckResult {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
 
-    // Built once and shared read-only across the per-doc tasks below.
-    const mapped_repos = try repo_map.RepoMap.build(ctx.run_arena, repo_entries, cwd_path);
-
     const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
 
-    // Kick off the `git remote get-url origin` query concurrently with the
-    // `git ls-files` run inside `discoverDocGroups`. Both are independent and
-    // both shell out to git, so the two subprocesses overlap.
+    // Kick off the `git remote get-url origin` query and the config read
+    // concurrently with the `git ls-files` run inside `discoverDocGroups`.
+    // All three are independent, so the subprocesses and the file read overlap.
     var identity_future = ctx.io.async(vcs.getRepoIdentity, .{ ctx.io, ctx.run_arena, ctx.run_arena, cwd_path });
     defer _ = identity_future.cancel(ctx.io);
+
+    var config_diagnostics: Config.Diagnostics = .{};
+    var config_future = ctx.io.async(Config.load, .{ ctx.io, ctx.run_arena, lf.root_path, &config_diagnostics });
+    defer if (config_future.cancel(ctx.io)) |_| {} else |_| {};
 
     var doc_groups = try discoverDocGroups(ctx.io, ctx.run_arena, lf.root_path, lf.bindings.items);
     defer {
         for (doc_groups.items) |*doc| doc.bindings.deinit(ctx.run_arena);
         doc_groups.deinit(ctx.run_arena);
     }
+
+    const config = config_future.await(ctx.io) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            reportConfigError(stderr_w, err, config_diagnostics.line_number);
+            return error.LintCheckFailed;
+        },
+    };
+
+    // Built once and shared read-only across the per-doc tasks below. Flag
+    // entries win over config entries on duplicate origins; flag paths resolve
+    // against cwd, config paths against the lockfile root (docs/CLI.md).
+    const mapped_repos = try repo_map.RepoMap.buildMerged(ctx.run_arena, repo_entries, cwd_path, config.repos, lf.root_path);
 
     const detected_vcs = vcs.detectVcs();
     const repo_identity = identity_future.await(ctx.io);
@@ -285,6 +300,27 @@ pub fn compute(
     }
 
     return result;
+}
+
+/// Prints a human-readable diagnostic for a `.drift/config.toml` load failure.
+/// The caller turns the failure into `error.LintCheckFailed` so `main` exits 1
+/// without printing a second, less specific message.
+fn reportConfigError(stderr_w: *std.Io.Writer, err: Config.LoadError, line_number: usize) void {
+    const detail: []const u8 = switch (err) {
+        error.ConfigRepoInvalid => "invalid [[repos]] entry: need origin = \"github:owner/repo\" and a non-empty path",
+        error.ConfigSyntax => "syntax error",
+        error.ConfigUnknownKey => "unknown key",
+        error.ConfigUnknownTable => "unknown table",
+        error.ConfigUnreadable => "file not readable",
+        error.ConfigVersionMissing => "missing 'version = 1' header",
+        error.ConfigVersionUnsupported => "unsupported config version",
+        error.OutOfMemory => "out of memory",
+    };
+    if (line_number > 0) {
+        stderr_w.print("error: .drift/config.toml:{d}: {s}\n", .{ line_number, detail }) catch {};
+    } else {
+        stderr_w.print("error: .drift/config.toml: {s}\n", .{detail}) catch {};
+    }
 }
 
 /// Write the text report for an already-computed result. Safe to call more

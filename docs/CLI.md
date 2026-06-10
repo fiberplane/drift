@@ -53,6 +53,18 @@ The `--repo <origin>=<path>` flag (repeatable) maps a foreign origin to a local 
 $ drift check --repo github:acme/server=../server
 ```
 
+The same mappings can live in `.drift/config.toml` as `[[repos]]` tables, so they don't have to be repeated on every invocation:
+
+```toml
+version = 1
+
+[[repos]]
+origin = "github:acme/server"
+path = "../server"
+```
+
+Config paths resolve against the lockfile root (checkout-location-independent), while `--repo` paths resolve against the current working directory. When a flag and a config entry map the same origin, the flag wins.
+
 ## drift status
 
 Show all docs and their anchors without checking staleness. Reads bindings from `drift.lock`.
