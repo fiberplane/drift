@@ -7,7 +7,7 @@
 Check all docs for staleness. The primary command. Exits 1 if any anchor is stale or any link is broken. `drift lint` is an alias. Markdown files under directories with their own `drift.lock` are skipped — they belong to a nested scope.
 
 ```
-drift check [--format text|json] [--changed <path>] [--silent]
+drift check [--format text|json] [--changed <path>] [--silent] [--repo <origin>=<path>]...
 ```
 
 Reads bindings from `drift.lock`, recomputes content signatures for each target, and compares against the stored `sig` values. Reports stale anchors with reasons.
@@ -46,6 +46,12 @@ vendor/shared-skill.md
 - `BROKEN` means a plain markdown link in the doc points to a file that doesn't exist — no lockfile entry is needed for this check.
 
 Anchors with an `origin` field that doesn't match the current repo are skipped — they reference files in a different repository.
+
+The `--repo <origin>=<path>` flag (repeatable) maps a foreign origin to a local checkout so those anchors are checked instead of skipped. The origin must be in the normalized `github:owner/repo` form; the path is the checkout's root directory, resolved relative to the current working directory. Fingerprints and blame for mapped anchors compute against the mapped checkout. If the mapped directory does not exist on disk the anchors are skipped with reason `mapped_repo_missing` rather than reported stale, so a teammate without the sibling checkout is not broken.
+
+```
+$ drift check --repo github:acme/server=../server
+```
 
 ## drift status
 

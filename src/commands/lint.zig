@@ -4,6 +4,7 @@ const drift_check_v1 = @import("payload");
 const CommandContext = @import("../context.zig").CommandContext;
 const lockfile = @import("../lockfile.zig");
 const markdown = @import("../markdown.zig");
+const repo_map = @import("../repo_map.zig");
 const symbols = @import("../symbols.zig");
 const target = @import("../target.zig");
 const vcs = @import("../vcs.zig");
@@ -59,6 +60,7 @@ const ReasonCode = enum {
     fingerprint_unavailable,
     baseline_unavailable,
     origin_mismatch,
+    mapped_repo_missing,
     link_target_not_found,
 };
 
@@ -72,6 +74,7 @@ fn reasonMessage(code: ReasonCode) []const u8 {
         .fingerprint_unavailable => "cannot compute fingerprint",
         .baseline_unavailable => "baseline unavailable",
         .origin_mismatch => "origin mismatch",
+        .mapped_repo_missing => "mapped repo missing",
         .link_target_not_found => "link target not found",
     };
 }
@@ -102,6 +105,10 @@ fn linkResultStr(r: LinkResult) []const u8 {
 
 const JsonAnchorRow = struct {
     blame_storage: ?vcs.BlameInfo,
+    /// Root the anchor was checked against: the scope root, or the mapped
+    /// sibling checkout when the binding's origin was resolved via `--repo`.
+    /// Blame queries in phase 2 run with this directory as cwd.
+    effective_root: []const u8,
     wire: drift_check_v1.Anchor,
 };
 
@@ -175,8 +182,9 @@ pub fn run(
     stderr_w: *std.Io.Writer,
     format: Format,
     changed_path: ?[]const u8,
+    repo_entries: []const repo_map.Entry,
 ) !RunStatus {
-    const result = try compute(ctx, stderr_w, changed_path);
+    const result = try compute(ctx, stderr_w, changed_path, repo_entries);
     switch (format) {
         .text => try renderText(stdout_w, &result),
         .json => try renderJson(ctx.run_arena, stdout_w, &result),
@@ -194,8 +202,12 @@ pub fn compute(
     ctx: CommandContext,
     stderr_w: *std.Io.Writer,
     changed_path: ?[]const u8,
+    repo_entries: []const repo_map.Entry,
 ) !CheckResult {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.run_arena);
+
+    // Built once and shared read-only across the per-doc tasks below.
+    const mapped_repos = try repo_map.RepoMap.build(ctx.run_arena, repo_entries, cwd_path);
 
     const lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), cwd_path);
     ctx.resetScratch();
@@ -257,6 +269,7 @@ pub fn compute(
             doc,
             detected_vcs,
             repo_identity,
+            &mapped_repos,
             &results[i],
         });
     }
@@ -301,9 +314,10 @@ fn checkOneDoc(
     doc: DocGroup,
     detected_vcs: vcs.VcsKind,
     repo_identity: ?[]const u8,
+    mapped_repos: *const repo_map.RepoMap,
     out: *?DocCheckResult,
 ) void {
-    checkOneDocInner(io, run_arena, root_path, doc, detected_vcs, repo_identity, out) catch |err| {
+    checkOneDocInner(io, run_arena, root_path, doc, detected_vcs, repo_identity, mapped_repos, out) catch |err| {
         // Persist the failure into the result slot so the main thread can
         // surface it as `error.LintCheckFailed` after `group.await`.
         const msg = std.fmt.allocPrint(run_arena, "error checking doc {s}: {s}\n", .{ doc.path, @errorName(err) }) catch "error checking doc (out of memory)\n";
@@ -325,6 +339,7 @@ fn checkOneDocInner(
     doc: DocGroup,
     detected_vcs: vcs.VcsKind,
     repo_identity: ?[]const u8,
+    mapped_repos: *const repo_map.RepoMap,
     out: *?DocCheckResult,
 ) !void {
     var task_scratch = std.heap.ArenaAllocator.init(run_arena);
@@ -359,12 +374,25 @@ fn checkOneDocInner(
         const parsed = target.parse(binding.target);
         const origin = binding.fieldValue("origin");
 
+        var effective_root = root_path;
         const outcome = blk: {
             if (origin) |o| {
                 const is_local = if (repo_identity) |ri| std.mem.eql(u8, o, ri) else false;
-                if (!is_local) break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
+                if (!is_local) {
+                    // A foreign origin is checkable when `--repo` maps it to a
+                    // local sibling checkout that exists on disk. Fingerprints
+                    // (and phase-2 blame) then compute against that checkout.
+                    const mapped_root = mapped_repos.resolve(o) orelse
+                        break :blk AnchorOutcome{ .result = .skip, .reason_code = .origin_mismatch };
+                    if (!pathExists(io, mapped_root)) {
+                        // Mapped but absent (e.g. a teammate without the
+                        // checkout): skip instead of reporting stale.
+                        break :blk AnchorOutcome{ .result = .skip, .reason_code = .mapped_repo_missing };
+                    }
+                    effective_root = mapped_root;
+                }
             }
-            break :blk checkBinding(task_ctx, root_path, binding, parsed, &file_cache) catch |err| {
+            break :blk checkBinding(task_ctx, effective_root, binding, parsed, &file_cache) catch |err| {
                 const msg = try std.fmt.allocPrint(run_arena, "error checking {s}: {s}\n", .{ binding.target, @errorName(err) });
                 doc_result.error_message = msg;
                 out.* = doc_result;
@@ -372,7 +400,7 @@ fn checkOneDocInner(
             };
         };
 
-        try doc_result.anchors.append(run_arena, jsonAnchorFromOutcome(binding.target, binding.fieldValue("sig"), parsed, outcome));
+        try doc_result.anchors.append(run_arena, jsonAnchorFromOutcome(binding.target, binding.fieldValue("sig"), parsed, outcome, effective_root));
         switch (outcome.result) {
             .fresh => fresh_count += 1,
             .stale => stale_count += 1,
@@ -398,7 +426,7 @@ fn checkOneDocInner(
         if (!std.mem.eql(u8, reason.code, @tagName(ReasonCode.changed_after_baseline))) continue;
 
         const future = io.async(vcs.getLatestBlameInfo, .{
-            io, run_arena, run_arena, root_path, row.wire.path, detected_vcs,
+            io, run_arena, run_arena, row.effective_root, row.wire.path, detected_vcs,
         });
         blame_jobs.append(run_arena, .{ .row_index = i, .future = future }) catch {
             // If we can't record the future, at least drain it so it doesn't leak.
@@ -744,10 +772,11 @@ fn driftReason(code: ReasonCode) ?drift_check_v1.Reason {
     return .{ .code = @tagName(code), .message = reasonMessage(code) };
 }
 
-fn jsonAnchorFromOutcome(raw_target: []const u8, sig: ?[]const u8, parsed: target.ParsedTarget, outcome: AnchorOutcome) JsonAnchorRow {
+fn jsonAnchorFromOutcome(raw_target: []const u8, sig: ?[]const u8, parsed: target.ParsedTarget, outcome: AnchorOutcome, effective_root: []const u8) JsonAnchorRow {
     const blame_storage = outcome.blame;
     return .{
         .blame_storage = blame_storage,
+        .effective_root = effective_root,
         .wire = .{
             .identity = parsed.identity,
             .raw = raw_target,
@@ -815,7 +844,13 @@ fn textEmitAnchor(w: *std.Io.Writer, origin: ?[]const u8, row: drift_check_v1.An
     }
 
     if (std.mem.eql(u8, row.result, "skip")) {
-        if (origin) |o| {
+        const is_origin_mismatch = if (row.reason) |reason|
+            std.mem.eql(u8, reason.code, @tagName(ReasonCode.origin_mismatch))
+        else
+            true;
+        if (!is_origin_mismatch) {
+            w.print("  SKIP   {s} ({s})\n", .{ row.raw, row.reason.?.message }) catch {};
+        } else if (origin) |o| {
             w.print("  SKIP   {s} (origin: {s})\n", .{ row.raw, o }) catch {};
         } else {
             w.print("  SKIP   {s}\n", .{row.raw}) catch {};

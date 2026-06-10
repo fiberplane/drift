@@ -21,7 +21,7 @@ fn buildDocument(a: std.mem.Allocator) !json.Value {
     try root.put(a, "$schema", .{ .string = "https://json-schema.org/draft/2020-12/schema" });
     try root.put(a, "$id", .{ .string = "drift.check.v1.json" });
     try root.put(a, "title", .{ .string = "drift check / lint JSON output" });
-    try root.put(a, "description", .{ .string = 
+    try root.put(a, "description", .{ .string =
         \\Wire format emitted by `drift check --format json` and `drift lint --format json`. Match top-level `schema_version` to "drift.check.v1". Unknown properties may appear in future drift versions; consumers should ignore them. See docs/check-json-schema.md.
     });
     try root.put(a, "type", .{ .string = "object" });
@@ -134,7 +134,7 @@ fn defSummary(a: std.mem.Allocator) !json.ObjectMap {
     var result = json.ObjectMap.empty;
     try result.put(a, "type", .{ .string = "string" });
     try result.put(a, "enum", try stringArray(a, &.{ "pass", "fail" }));
-    try result.put(a, "description", .{ .string = 
+    try result.put(a, "description", .{ .string =
         \\fail iff any anchor is stale or any link is broken; mirrors process exit code (0 pass, 1 fail).
     });
     try props.put(a, "result", .{ .object = result });
@@ -142,7 +142,7 @@ fn defSummary(a: std.mem.Allocator) !json.ObjectMap {
     var vs = json.ObjectMap.empty;
     try vs.put(a, "type", .{ .string = "string" });
     try vs.put(a, "enum", try stringArray(a, &.{ "none", "partial", "full" }));
-    try vs.put(a, "description", .{ .string = 
+    try vs.put(a, "description", .{ .string =
         \\Coverage of verification: none = all docs skipped; partial = mix; full = nothing skipped (including zero docs).
     });
     try props.put(a, "verification_state", .{ .object = vs });
