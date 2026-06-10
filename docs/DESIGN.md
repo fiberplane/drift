@@ -249,20 +249,15 @@ Format rules:
 - Lines starting with `#` are comments, blank lines ignored; inline comments and general TOML tables are outside the lockfile subset
 - Discovery: walk up from cwd until `drift.lock` is found
 
-### .drift/config.yaml
+### .drift/config.toml
 
 Optional project-level settings. The `.drift/` directory exists only for configuration (scan globs, VCS backend override, etc.).
 
-```yaml
-# .drift/config.yaml (optional)
-scan:
-  include:
-    - "docs/**/*.md"
-    - "*.md"
-  exclude:
-    - "node_modules/**"
-    - "vendor/**"
-vcs: auto    # auto | git | jj
+The config reuses the lockfile's TOML subset: a mandatory `version = 1` header, `[[array-of-tables]]` blocks, bare keys, and single-line basic strings with the same escapes. Blank lines and full-line `#` comments are ignored; unknown keys or tables are hard errors with a line number, matching lockfile strictness.
+
+```toml
+# .drift/config.toml (optional)
+version = 1
 ```
 
-If no config exists, drift scans all `*.md` and `**/*.md` files and auto-detects the VCS.
+The current schema is the version header only; settings such as `[[repos]]` land in later revisions. If no config exists, drift scans all `*.md` and `**/*.md` files and auto-detects the VCS.
