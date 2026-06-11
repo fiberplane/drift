@@ -3,6 +3,7 @@ const build_options = @import("build_options");
 const clap = @import("clap");
 
 const CommandContext = @import("context.zig").CommandContext;
+const repo_map = @import("repo_map.zig");
 const lint = @import("commands/lint.zig");
 const status = @import("commands/status.zig");
 const link = @import("commands/link.zig");
@@ -52,8 +53,35 @@ const check_params = clap.parseParamsComptime(
     \\--format <str>
     \\--changed <str>
     \\--silent
+    \\--repo <str>...
     \\
 );
+
+const check_usage = "usage: drift check [--format text|json] [--changed <path>] [--silent] [--repo <origin>=<path>]...\n";
+
+/// Parses each repeated `--repo <origin>=<path>` value into a repo_map.Entry,
+/// exiting with a usage error on the first malformed spec.
+fn parseRepoSpecs(
+    run_alloc: std.mem.Allocator,
+    specs: []const []const u8,
+    stderr_w: *std.Io.Writer,
+) []const repo_map.Entry {
+    const entries = run_alloc.alloc(repo_map.Entry, specs.len) catch {
+        fatal(stderr_w, "error: out of memory\n", .{});
+    };
+    for (specs, entries) |spec, *entry| {
+        entry.* = repo_map.parseSpec(spec) catch |err| {
+            const detail: []const u8 = switch (err) {
+                error.MissingSeparator => "missing '=' separator",
+                error.EmptyOrigin => "empty origin",
+                error.EmptyPath => "empty path",
+                error.InvalidOrigin => "origin must look like github:owner/repo",
+            };
+            fatal(stderr_w, "error: invalid --repo spec '{s}': {s} (expected <origin>=<path>, e.g. github:acme/server=../server)\n", .{ spec, detail });
+        };
+    }
+    return entries;
+}
 
 fn parseFormat(maybe_value: ?[]const u8, stderr_w: *std.Io.Writer) lint.Format {
     const value = maybe_value orelse return .text;
@@ -161,7 +189,7 @@ pub fn main(init: std.process.Init) !void {
             var sub = parseExOrReport(&check_params, clap.parsers.default, gpa, &diag, io, &stderr_w.interface, &iter, clap_parse_all);
             defer sub.deinit();
             if (iter.next()) |_| {
-                fatal(&stderr_w.interface, "usage: drift check [--format text|json] [--changed <path>] [--silent]\n", .{});
+                fatal(&stderr_w.interface, check_usage, .{});
             }
             const format = parseFormat(sub.args.format, &stderr_w.interface);
             const silent = sub.args.silent != 0;
@@ -170,7 +198,8 @@ pub fn main(init: std.process.Init) !void {
             var scratch_arena = std.heap.ArenaAllocator.init(gpa);
             defer scratch_arena.deinit();
             const ctx = CommandContext{ .io = io, .run_arena = run_arena.allocator(), .scratch_arena = &scratch_arena };
-            const result = lint.compute(ctx, &stderr_w.interface, sub.args.changed) catch |err| switch (err) {
+            const repo_entries = parseRepoSpecs(ctx.run_arena, sub.args.repo, &stderr_w.interface);
+            const result = lint.compute(ctx, &stderr_w.interface, sub.args.changed, repo_entries) catch |err| switch (err) {
                 error.LintCheckFailed => {
                     stdout_w.interface.flush() catch {};
                     stderr_w.interface.flush() catch {};
@@ -306,7 +335,7 @@ fn printUsage(w: *std.Io.Writer) void {
         \\Usage: drift <command> [options]
         \\
         \\Commands:
-        \\  check     Check all docs for staleness  [--format text|json] [--changed <path>] [--silent]
+        \\  check     Check all docs for staleness  [--format text|json] [--changed <path>] [--silent] [--repo <origin>=<path>]...
         \\  status    Show all docs and their anchors  [--format text|json]
         \\  link      Add anchors to a doc  [--doc-is-still-accurate]
         \\  unlink    Remove anchors from a doc

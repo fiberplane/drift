@@ -160,3 +160,9 @@ We use tree-sitter for link extraction rather than regex because:
 - Tree-sitter markdown's `section` node provides heading-to-body grouping, which regex cannot reliably determine
 
 The two-parser architecture requires two passes per file: block grammar first (producing `inline` node ranges), then inline grammar on those ranges. This adds build complexity (two grammar C sources, two `ts.Language` instances) but is how the grammar is designed — block and inline are separate grammars with separate node types.
+
+## 15. Repo mappings merge with CLI-wins precedence
+
+Foreign-origin checkout mappings come from two sources: repeated `--repo <origin>=<path>` flags and `[[repos]]` tables in `.drift/config.toml`. Both feed one merged map; when both define the same origin, the flag entry wins. This follows the usual configuration layering rule — the most explicit, most recent instruction (typed on the command line for this run) overrides the persistent default (checked into config) — and makes one-off experiments cheap: point an origin at a scratch checkout without editing shared config.
+
+Path resolution differs by source on purpose. Config paths resolve against the lockfile root so a committed mapping like `path = "../server"` works for every teammate regardless of where the repo is cloned or which subdirectory `drift check` runs from. Flag paths resolve against the cwd, matching how every other command-line path argument behaves.

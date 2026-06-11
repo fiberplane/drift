@@ -156,7 +156,8 @@ Each entry represents a relative markdown link extracted from the doc via tree-s
 | `symbol_not_found` | A `file#Symbol` anchor's symbol is no longer present. |
 | `fingerprint_unavailable` | A `@sig:` anchor could not be re-fingerprinted (e.g. unknown language). |
 | `baseline_unavailable` | Reserved — historical baseline could not be retrieved. (Not currently emitted; held for forward compatibility.) |
-| `origin_mismatch` | The doc's `origin:` does not match the current repo identity. Anchors are skipped. |
+| `origin_mismatch` | The doc's `origin:` does not match the current repo identity and no `--repo` mapping covers it. Anchors are skipped. |
+| `mapped_repo_missing` | A `--repo` mapping covers the origin but the mapped directory does not exist on disk. Anchors are skipped. |
 | `link_target_not_found` | A plain markdown link in the doc points to a file that doesn't exist. |
 
 `reason.message` strings are stable in `v1` and asserted by tests. Changing one is a

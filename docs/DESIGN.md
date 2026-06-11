@@ -249,20 +249,23 @@ Format rules:
 - Lines starting with `#` are comments, blank lines ignored; inline comments and general TOML tables are outside the lockfile subset
 - Discovery: walk up from cwd until `drift.lock` is found
 
-### .drift/config.yaml
+### .drift/config.toml
 
 Optional project-level settings. The `.drift/` directory exists only for configuration (scan globs, VCS backend override, etc.).
 
-```yaml
-# .drift/config.yaml (optional)
-scan:
-  include:
-    - "docs/**/*.md"
-    - "*.md"
-  exclude:
-    - "node_modules/**"
-    - "vendor/**"
-vcs: auto    # auto | git | jj
+The config reuses the lockfile's TOML subset: a mandatory `version = 1` header, `[[array-of-tables]]` blocks, bare keys, and single-line basic strings with the same escapes. Blank lines and full-line `#` comments are ignored; unknown keys or tables are hard errors with a line number, matching lockfile strictness.
+
+```toml
+# .drift/config.toml (optional)
+version = 1
+
+[[repos]]
+origin = "github:acme/server"
+path = "../server"
 ```
+
+Each `[[repos]]` table maps a foreign binding origin to a local checkout, with exactly two keys: `origin` (normalized `github:owner/repo` form, same validation as `--repo` flag specs) and `path` (the checkout's root directory). Relative paths resolve against the lockfile root — not the cwd — so the mapping works no matter where in the checkout `drift check` runs. Unknown keys inside `[[repos]]` are hard errors.
+
+`--repo` flags and `[[repos]]` entries feed the same origin map; when both define the same origin, the CLI flag wins. Flag paths resolve against the cwd, as usual for command-line paths.
 
 If no config exists, drift scans all `*.md` and `**/*.md` files and auto-detects the VCS.
