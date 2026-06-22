@@ -179,16 +179,17 @@ pub fn main(init: std.process.Init) !void {
                 else => exitWithError(&stderr_w.interface, err),
             };
             const run_status = result.status();
-            // In silent mode, the normal report is suppressed. When the run fails we
-            // redirect the same report to stderr so the user still gets the human-
-            // readable signal alongside the non-zero exit code.
+            // In silent mode, passing runs stay quiet. When the run fails, text
+            // reports are filtered to only actionable stale/broken docs and written
+            // to stderr alongside the non-zero exit code. JSON stays complete to
+            // preserve the drift.check.v1 contract.
             const render_to_stdout = !silent;
             const render_to_stderr_on_fail = silent and run_status == .fail;
             if (render_to_stdout) {
-                renderCheckReport(ctx.run_arena, &stdout_w.interface, &result, format) catch |err| exitWithError(&stderr_w.interface, err);
+                renderCheckReport(ctx.run_arena, &stdout_w.interface, &result, format, .all) catch |err| exitWithError(&stderr_w.interface, err);
             }
             if (render_to_stderr_on_fail) {
-                renderCheckReport(ctx.run_arena, &stderr_w.interface, &result, format) catch |err| exitWithError(&stderr_w.interface, err);
+                renderCheckReport(ctx.run_arena, &stderr_w.interface, &result, format, .errors_only) catch |err| exitWithError(&stderr_w.interface, err);
             }
             // Exit-on-stale lives here (not in lint.run) so all `defer`s above unwind
             // before the process dies. std.process.exit calls libc exit, which does not
@@ -326,9 +327,10 @@ fn renderCheckReport(
     w: *std.Io.Writer,
     result: *const lint.CheckResult,
     format: lint.Format,
+    text_mode: lint.TextReportMode,
 ) !void {
     switch (format) {
-        .text => try lint.renderText(w, result),
+        .text => try lint.renderText(w, result, text_mode),
         .json => try lint.renderJson(run_alloc, w, result),
     }
 }

@@ -4,7 +4,7 @@ version = 1
 doc = ".claude/skills/drift/SKILL.md"
 target = "src/main.zig"
 origin = "github:fiberplane/drift"
-sig = "3faa73e2bb344a79"
+sig = "f3b812f15563f0a2"
 
 [[bindings]]
 doc = ".claude/skills/drift/SKILL.md"
@@ -20,7 +20,7 @@ sig = "2dccb33f6b790afa"
 [[bindings]]
 doc = "CLAUDE.md"
 target = "src/main.zig"
-sig = "3faa73e2bb344a79"
+sig = "f3b812f15563f0a2"
 
 [[bindings]]
 doc = "docs/CLI.md"
@@ -30,7 +30,7 @@ sig = "3ae8f4ee2c85d8d8"
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/lint.zig"
-sig = "fe7bd5a687f3e917"
+sig = "270d047d8cbaf238"
 
 [[bindings]]
 doc = "docs/CLI.md"
@@ -60,7 +60,7 @@ sig = "55bc77a2853cb654"
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/main.zig"
-sig = "3faa73e2bb344a79"
+sig = "f3b812f15563f0a2"
 
 [[bindings]]
 doc = "docs/DESIGN.md"

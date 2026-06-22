@@ -844,3 +844,112 @@ test "check from nested subdir with its own drift.lock only checks that scope" {
     // Should NOT contain docs from root scope
     try helpers.expectNotContains(result.stdout, "docs/root.md");
 }
+
+test "check --silent suppresses passing output" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("src/main.ts", "export const value = 1;\n");
+    try repo.commit("add doc and source");
+
+    try linkDoc(&repo, "docs/doc.md", "src/main.ts");
+    try repo.commit("link doc");
+
+    const result = try repo.runDrift(&.{ "check", "--silent" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 0);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+}
+
+test "check --silent prints only stale and broken docs on failure" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/stale.md", "# Stale\n");
+    try repo.writeFile("docs/ok.md", "# Ok\n");
+    try repo.writeFile("docs/broken.md", "# Broken\n\nSee [missing](missing.md).\n");
+    try repo.writeFile("src/stale.ts", "export const stale = 1;\n");
+    try repo.writeFile("src/ok.ts", "export const ok = 1;\n");
+    try repo.commit("add docs and sources");
+
+    try linkDoc(&repo, "docs/stale.md", "src/stale.ts");
+    try linkDoc(&repo, "docs/ok.md", "src/ok.ts");
+    try repo.commit("link docs");
+
+    try repo.writeFile("src/stale.ts", "export const stale = 2;\n");
+    try repo.commit("make stale doc stale");
+
+    const result = try repo.runDrift(&.{ "check", "--silent" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try helpers.expectContains(result.stderr, "docs/stale.md");
+    try helpers.expectContains(result.stderr, "STALE   src/stale.ts");
+    try helpers.expectContains(result.stderr, "docs/broken.md");
+    try helpers.expectContains(result.stderr, "BROKEN  docs/missing.md (link target not found)");
+    try helpers.expectContains(result.stderr, "2 of 3 docs failed, 1 ok, 1 broken link");
+    try helpers.expectNotContains(result.stderr, "docs/ok.md");
+    try helpers.expectNotContains(result.stderr, "  ok\n");
+}
+
+test "check --silent composes with changed path filtering" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/auth.md", "# Auth\n");
+    try repo.writeFile("docs/payments.md", "# Payments\n");
+    try repo.writeFile("src/auth/login.ts", "export const login = true;\n");
+    try repo.writeFile("src/payments/stripe.ts", "export const stripe = true;\n");
+    try repo.commit("add docs and sources");
+
+    try linkDoc(&repo, "docs/auth.md", "src/auth/login.ts");
+    try linkDoc(&repo, "docs/payments.md", "src/payments/stripe.ts");
+    try repo.commit("link both docs");
+
+    try repo.writeFile("src/auth/login.ts", "export const login = false;\n");
+    try repo.commit("modify auth source");
+
+    const result = try repo.runDrift(&.{ "check", "--silent", "--changed", "src/auth" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try helpers.expectContains(result.stderr, "docs/auth.md");
+    try helpers.expectContains(result.stderr, "1 of 1 doc failed");
+    try helpers.expectNotContains(result.stderr, "docs/payments.md");
+}
+
+test "check --silent --format json keeps full payload on failure" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/stale.md", "# Stale\n");
+    try repo.writeFile("docs/ok.md", "# Ok\n");
+    try repo.writeFile("src/stale.ts", "export const stale = 1;\n");
+    try repo.writeFile("src/ok.ts", "export const ok = 1;\n");
+    try repo.commit("add docs and sources");
+
+    try linkDoc(&repo, "docs/stale.md", "src/stale.ts");
+    try linkDoc(&repo, "docs/ok.md", "src/ok.ts");
+    try repo.commit("link docs");
+
+    try repo.writeFile("src/stale.ts", "export const stale = 2;\n");
+    try repo.commit("make stale doc stale");
+
+    const result = try repo.runDrift(&.{ "check", "--silent", "--format", "json" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 1);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try helpers.validateDriftCheckJson(allocator, result.stderr);
+    try helpers.expectContains(result.stderr, "docs/stale.md");
+    try helpers.expectContains(result.stderr, "docs/ok.md");
+}

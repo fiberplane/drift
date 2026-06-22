@@ -9,6 +9,7 @@ const target = @import("../target.zig");
 const vcs = @import("../vcs.zig");
 
 pub const Format = enum { text, json };
+pub const TextReportMode = enum { all, errors_only };
 pub const RunStatus = enum { pass, fail };
 pub const RunError = error{LintCheckFailed};
 
@@ -178,7 +179,7 @@ pub fn run(
 ) !RunStatus {
     const result = try compute(ctx, stderr_w, changed_path);
     switch (format) {
-        .text => try renderText(stdout_w, &result),
+        .text => try renderText(stdout_w, &result, .all),
         .json => try renderJson(ctx.run_arena, stdout_w, &result),
     }
     return result.status();
@@ -277,8 +278,8 @@ pub fn compute(
 /// Write the text report for an already-computed result. Safe to call more
 /// than once (e.g. to stdout under normal conditions and to stderr when
 /// `--silent` runs fail).
-pub fn renderText(w: *std.Io.Writer, result: *const CheckResult) !void {
-    try writeResultsText(w, result, result.checkedAny());
+pub fn renderText(w: *std.Io.Writer, result: *const CheckResult, mode: TextReportMode) !void {
+    try writeResultsText(w, result, result.checkedAny(), mode);
 }
 
 /// Write the JSON report for an already-computed result.
@@ -767,13 +768,17 @@ fn jsonAnchorFromOutcome(raw_target: []const u8, sig: ?[]const u8, parsed: targe
     };
 }
 
-fn writeResultsText(w: *std.Io.Writer, result: *const CheckResult, checked_any: bool) !void {
+fn writeResultsText(w: *std.Io.Writer, result: *const CheckResult, checked_any: bool, mode: TextReportMode) !void {
     if (!checked_any) {
         try w.writeAll("ok\n");
         return;
     }
 
-    for (result.docs.items, 0..) |doc, doc_index| {
+    var wrote_doc = false;
+    for (result.docs.items) |doc| {
+        if (mode == .errors_only and doc.result != .stale and doc.result != .broken) continue;
+
+        if (wrote_doc) try w.writeByte('\n');
         try w.print("{s}\n", .{doc.path});
 
         for (doc.anchors.items) |row| {
@@ -787,14 +792,15 @@ fn writeResultsText(w: *std.Io.Writer, result: *const CheckResult, checked_any: 
             try w.writeAll("  ok\n");
         }
 
-        if (doc_index + 1 < result.docs.items.len) {
-            try w.writeByte('\n');
-        }
+        wrote_doc = true;
     }
 
     if (result.docs_stale > 0 or result.docs_fresh > 0 or result.links_broken > 0) {
-        if (result.docs.items.len > 0) try w.writeByte('\n');
-        try writeSummaryText(w, result);
+        if (wrote_doc) try w.writeByte('\n');
+        switch (mode) {
+            .all => try writeSummaryText(w, result),
+            .errors_only => try writeFailureSummaryText(w, result),
+        }
         try w.writeByte('\n');
     }
 }
@@ -843,6 +849,20 @@ fn writeSummaryText(w: *std.Io.Writer, result: *const CheckResult) !void {
     if (result.links_broken > 0) {
         if (wrote_any) try w.writeAll(", ");
         try w.print("{d} broken link{s}", .{ result.links_broken, if (result.links_broken == 1) "" else "s" });
+    }
+}
+
+fn writeFailureSummaryText(w: *std.Io.Writer, result: *const CheckResult) !void {
+    try w.print("{d} of {d} doc{s} failed", .{ result.docs_stale, result.docsChecked(), if (result.docsChecked() == 1) "" else "s" });
+
+    if (result.docs_fresh > 0) {
+        try w.print(", {d} ok", .{result.docs_fresh});
+    }
+    if (result.links_broken > 0) {
+        try w.print(", {d} broken link{s}", .{ result.links_broken, if (result.links_broken == 1) "" else "s" });
+    }
+    if (result.docs_skipped > 0) {
+        try w.print(", {d} skipped", .{result.docs_skipped});
     }
 }
 

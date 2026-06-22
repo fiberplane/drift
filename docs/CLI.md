@@ -14,7 +14,7 @@ Reads bindings from `drift.lock`, recomputes content signatures for each target,
 
 The `--changed <path>` flag scopes checking to docs whose targets match the given path prefix. This enables efficient CI integration — a pipeline that knows which files changed can check only the affected docs without running a full lint.
 
-The `--silent` flag suppresses the report on passing runs (exit 0, no output). When the run fails it still exits 1, and the same report (text or JSON, honoring `--format`) is written to **stderr** so the failure is observable in terminals and CI logs. Redirect stderr with `2>/dev/null` to silence the failure output as well; the exit code is unchanged.
+The `--silent` flag suppresses the report on passing runs (exit 0, no output). When the run fails it still exits 1. In text mode, only stale/broken doc blocks plus a failure summary such as `1 of 137 docs failed, 136 ok` are written to **stderr** so the actionable failures are visible without ok-doc noise while preserving pass/fail scale. In JSON mode, the complete `drift.check.v1` payload is written to **stderr** to preserve the schema contract. Redirect stderr with `2>/dev/null` to silence the failure output as well; the exit code is unchanged.
 
 The JSON output emits the `drift.check.v1` schema with summary counts, per-doc results, per-anchor reason codes, and (best-effort) git blame on stale anchors. The exit code is the same as the text path: 0 on pass, 1 on stale. Errors writing the JSON payload (broken pipe, encoder failure) exit non-zero rather than emitting a truncated document. See [`check-json-schema.md`](./check-json-schema.md) for the full schema.
 
