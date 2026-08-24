@@ -40,6 +40,32 @@ test "link adds new file binding to drift.lock" {
     try std.testing.expectEqualStrings("# Doc\n", doc_content);
 }
 
+test "link stores repo-relative paths with POSIX separators" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("docs/doc.md", "# Doc\n");
+    try repo.writeFile("src/new.ts", "export const value = 1;\n");
+    try repo.commit("add doc and source");
+
+    // A Windows shell hands drift backslash-separated arguments, but the
+    // lockfile is shared across platforms and is matched against `git ls-files`
+    // output, which is POSIX everywhere. Degenerates to the plain form on POSIX
+    // hosts, where a backslash is an ordinary filename byte.
+    const sep = std.Io.Dir.path.sep_str;
+    const result = try repo.runDrift(&.{ "link", "docs" ++ sep ++ "doc.md", "src" ++ sep ++ "new.ts" });
+    defer result.deinit(allocator);
+
+    try helpers.expectExitCode(result.term, 0);
+    try helpers.expectContains(result.stdout, "added docs/doc.md -> src/new.ts sig:");
+
+    const lock_content = try repo.readFile("drift.lock");
+    defer allocator.free(lock_content);
+    try helpers.expectContains(lock_content, "doc = \"docs/doc.md\"\n");
+    try helpers.expectContains(lock_content, "target = \"src/new.ts\"\n");
+}
+
 test "link adds symbol binding to drift.lock" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);

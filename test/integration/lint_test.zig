@@ -177,6 +177,37 @@ test "check ignores typescript formatting-only file change" {
     );
 }
 
+test "check ignores a CRLF-vs-LF checkout difference" {
+    const allocator = std.testing.allocator;
+    // Git rewrites LF to CRLF on checkout when core.autocrlf is on, the Windows
+    // default. A fingerprint recorded on one platform has to keep matching on
+    // the other, including for extensions that have no tree-sitter grammar and
+    // fall back to hashing raw bytes.
+    try expectFormattingOnlyFileChangeIsFresh(
+        allocator,
+        "src/math.ts",
+        "function add(a: number, b: number): number {\r\n  return a + b;\r\n}\r\n",
+        "function add(a: number, b: number): number {\n  return a + b;\n}\n",
+    );
+    try expectFormattingOnlyFileChangeIsFresh(
+        allocator,
+        "config/settings.conf",
+        "listen = 8080\r\nworkers = 4\r\n",
+        "listen = 8080\nworkers = 4\n",
+    );
+}
+
+test "check ignores a CRLF-vs-LF checkout difference for markdown headings" {
+    const allocator = std.testing.allocator;
+    try expectFormattingOnlySymbolChangeIsFresh(
+        allocator,
+        "docs/auth.md",
+        "docs/auth.md#Token Validation",
+        "# Auth\r\n\r\n## Token Validation\r\n\r\nTokens expire after an hour.\r\n",
+        "# Auth\n\n## Token Validation\n\nTokens expire after an hour.\n",
+    );
+}
+
 test "check ignores python formatting-only file change" {
     const allocator = std.testing.allocator;
     try expectFormattingOnlyFileChangeIsFresh(

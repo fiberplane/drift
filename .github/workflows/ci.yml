@@ -38,6 +38,28 @@ jobs:
       - name: Lint specs
         run: ./zig-out/bin/drift lint
 
+  # Windows is the one platform where paths, line endings, and the executable
+  # suffix differ, so it gets a native test run rather than a cross-compile.
+  test-windows:
+    name: Test (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build and test
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Lint specs
+        run: ./zig-out/bin/drift.exe lint
+
   build:
     name: Build (${{ matrix.target }})
     needs: [lint]
@@ -59,6 +81,15 @@ jobs:
           - target: aarch64-linux
             runner: ubuntu-22.04
             zig-target: aarch64-linux-gnu
+          - target: x86_64-windows
+            runner: ubuntu-22.04
+            zig-target: x86_64-windows-gnu
+            zig-cpu: baseline
+            windows: true
+          - target: aarch64-windows
+            runner: ubuntu-22.04
+            zig-target: aarch64-windows-gnu
+            windows: true
 
     steps:
       - name: Checkout
@@ -74,11 +105,19 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig-target }} ${{ matrix.zig-cpu && format('-Dcpu={0}', matrix.zig-cpu) || '' }}
 
+      # Windows can open a .zip without extra tooling but not a .tar.gz, so
+      # Windows builds ship as .zip and everything else as .tar.gz.
       - name: Package
-        run: tar -czf drift-${{ matrix.target }}.tar.gz -C zig-out/bin drift
+        run: |
+          if [ -n "${{ matrix.windows }}" ]; then
+            zip -q -j -X drift-${{ matrix.target }}.zip zig-out/bin/drift.exe
+          else
+            tar -czf drift-${{ matrix.target }}.tar.gz -C zig-out/bin drift
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: drift-${{ matrix.target }}
-          path: drift-${{ matrix.target }}.tar.gz
+          path: drift-${{ matrix.target }}.*
+          if-no-files-found: error

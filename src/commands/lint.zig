@@ -2,8 +2,10 @@ const std = @import("std");
 const build_options = @import("build_options");
 const drift_check_v1 = @import("payload");
 const CommandContext = @import("../context.zig").CommandContext;
+const content_mod = @import("../content.zig");
 const lockfile = @import("../lockfile.zig");
 const markdown = @import("../markdown.zig");
+const repo_path = @import("../repo_path.zig");
 const symbols = @import("../symbols.zig");
 const target = @import("../target.zig");
 const vcs = @import("../vcs.zig");
@@ -40,7 +42,7 @@ const FileCache = struct {
 
         const a = self.arena.allocator();
         var file_reader = file.reader(self.io, &.{});
-        const content = try file_reader.interface.allocRemaining(a, .limited(1024 * 1024));
+        const content = content_mod.normalizeLineEndings(try file_reader.interface.allocRemaining(a, .limited(1024 * 1024)));
         const key = try a.dupe(u8, absolute_path);
         try self.current.put(key, content);
         return content;
@@ -630,7 +632,7 @@ fn classifyLinkTask(
     if (path_part.len == 0) return;
 
     const absolute = std.Io.Dir.path.resolve(run_arena, &.{ doc_dir, path_part }) catch return;
-    const relative = std.Io.Dir.path.relative(run_arena, "", null, root_path, absolute) catch return;
+    const relative = repo_path.normalize(std.Io.Dir.path.relative(run_arena, "", null, root_path, absolute) catch return);
     const exists = pathExists(io, absolute);
 
     slot.* = .{
@@ -677,11 +679,11 @@ fn normalizeChangedPrefix(
     raw_path: []const u8,
 ) ![]const u8 {
     if (std.Io.Dir.path.isAbsolute(raw_path)) {
-        return try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, raw_path);
+        return repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, raw_path));
     }
 
     const absolute = try std.Io.Dir.path.resolve(ctx.scratch(), &.{ cwd_path, raw_path });
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
     ctx.resetScratch();
     return relative;
 }

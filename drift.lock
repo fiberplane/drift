@@ -15,7 +15,7 @@ sig = "84da70be235ca9d4"
 [[bindings]]
 doc = "CLAUDE.md"
 target = "build.zig"
-sig = "2dccb33f6b790afa"
+sig = "46dc6d7f3bcf51a8"
 
 [[bindings]]
 doc = "CLAUDE.md"
@@ -25,17 +25,17 @@ sig = "f3b812f15563f0a2"
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/link.zig"
-sig = "3ae8f4ee2c85d8d8"
+sig = "c87c4a5ee23cadc9"
 
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/lint.zig"
-sig = "270d047d8cbaf238"
+sig = "79978e9c11d55527"
 
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/refs.zig"
-sig = "f623b7774086094e"
+sig = "2c07dae18d4ebe25"
 
 [[bindings]]
 doc = "docs/CLI.md"
@@ -45,7 +45,12 @@ sig = "eade166d24a20b81"
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/unlink.zig"
-sig = "0dbe1ee3315211b5"
+sig = "d938905bf6073cea"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/content.zig"
+sig = "6d381fc98eb032b0"
 
 [[bindings]]
 doc = "docs/DESIGN.md"
@@ -55,12 +60,17 @@ sig = "82d9da38ea486f36"
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/lockfile.zig"
-sig = "55bc77a2853cb654"
+sig = "11c5ffbe19e53453"
 
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/main.zig"
 sig = "f3b812f15563f0a2"
+
+[[bindings]]
+doc = "docs/DESIGN.md"
+target = "src/repo_path.zig"
+sig = "fc55dc2a392f67e6"
 
 [[bindings]]
 doc = "docs/DESIGN.md"
@@ -85,12 +95,12 @@ sig = "7d0fe37e5eff5e30"
 [[bindings]]
 doc = "docs/RELEASING.md"
 target = ".github/workflows/ci.yml"
-sig = "c14a23e6547d575f"
+sig = "15de5934583eb324"
 
 [[bindings]]
 doc = "docs/RELEASING.md"
 target = ".github/workflows/release.yml"
-sig = "19b334776bec1eda"
+sig = "4ce4ca9a5516959a"
 
 [[bindings]]
 doc = "docs/RELEASING.md"

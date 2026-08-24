@@ -1,6 +1,7 @@
 const std = @import("std");
 const CommandContext = @import("../context.zig").CommandContext;
 const lockfile = @import("../lockfile.zig");
+const repo_path = @import("../repo_path.zig");
 const target = @import("../target.zig");
 
 pub fn run(ctx: CommandContext, stdout_w: *std.Io.Writer, stderr_w: *std.Io.Writer, doc_path: []const u8, anchor: []const u8) !void {
@@ -48,7 +49,7 @@ fn normalizeSpecPath(
     doc_path: []const u8,
 ) ![]const u8 {
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
     ctx.resetScratch();
     return relative;
 }
@@ -64,7 +65,7 @@ fn normalizeTargetPath(
     const symbol_name = parsed.symbol_name;
 
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, file_part);
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
     ctx.resetScratch();
 
     if (symbol_name) |symbol| {

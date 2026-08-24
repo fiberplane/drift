@@ -1,7 +1,9 @@
 const std = @import("std");
 const CommandContext = @import("../context.zig").CommandContext;
+const content_mod = @import("../content.zig");
 const lockfile = @import("../lockfile.zig");
 const markdown = @import("../markdown.zig");
+const repo_path = @import("../repo_path.zig");
 const symbols = @import("../symbols.zig");
 const target = @import("../target.zig");
 
@@ -24,10 +26,11 @@ pub fn run(
     var lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
-    const doc_content = std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
+    const raw_doc_content = std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
         stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
         return error.DocReadFailed;
     };
+    const doc_content = content_mod.normalizeLineEndings(raw_doc_content);
 
     const normalized_doc_path = try normalizeDocPath(ctx, lf.root_path, cwd_path, doc_path);
     ctx.resetScratch();
@@ -47,7 +50,7 @@ pub fn run(
         ctx.resetScratch();
 
         const existing_binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target);
-        const old_sig = if (existing_binding) |b| b.fieldValue("sig") else null;
+        const old_sig = if (existing_binding) |b| try copySig(ctx, b) else null;
 
         upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target) catch |err| switch (err) {
             error.CannotComputeFingerprint => {
@@ -78,7 +81,7 @@ pub fn run(
     var refused_count: usize = 0;
     for (lf.bindings.items) |*binding| {
         if (!std.mem.eql(u8, binding.doc_path, normalized_doc_path)) continue;
-        const old_sig = binding.fieldValue("sig");
+        const old_sig = try copySig(ctx, binding);
         refreshBindingSig(ctx, cwd_path, lf.root_path, binding) catch |err| switch (err) {
             error.CannotComputeFingerprint => {
                 stderr_w.print("error: cannot compute fingerprint for target: {s}\n", .{binding.target}) catch {};
@@ -125,6 +128,17 @@ fn promptDocAccurate(io: std.Io, stderr_w: *std.Io.Writer) bool {
     const slice = stdin_reader.interface.takeDelimiterExclusive('\n') catch return false;
     const answer = std.mem.trimEnd(u8, slice, "\r\n \t");
     return answer.len > 0 and (answer[0] == 'y' or answer[0] == 'Y');
+}
+
+/// Copy a binding's current signature out before restamping it.
+///
+/// `Binding.setField` frees the previous value, so a slice held across
+/// `refreshBindingSig` dangles and the gate below would compare against freed
+/// memory — refusing or waving through a relink depending on what the allocator
+/// happened to leave there.
+fn copySig(ctx: CommandContext, binding: *const lockfile.Binding) !?[]const u8 {
+    const sig = binding.fieldValue("sig") orelse return null;
+    return try ctx.run_arena.dupe(u8, sig);
 }
 
 /// Returns true when a relink should be refused: target changed without review.
@@ -238,7 +252,7 @@ fn normalizeDocPath(
     doc_path: []const u8,
 ) ![]const u8 {
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
     ctx.resetScratch();
     return relative;
 }
@@ -256,7 +270,7 @@ fn normalizeTargetPath(
         return error.TargetNotFound;
     }
 
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
 
     if (parsed.symbol_name) |symbol| {
         if (parsed.isHeading()) {
@@ -308,7 +322,7 @@ fn readResolvedFile(ctx: CommandContext, path: []const u8) ![]const u8 {
         try std.Io.Dir.cwd().openFile(ctx.io, path, .{});
     defer file.close(ctx.io);
     var file_reader = file.reader(ctx.io, &.{});
-    return try file_reader.interface.allocRemaining(ctx.scratch(), .limited(1024 * 1024));
+    return content_mod.normalizeLineEndings(try file_reader.interface.allocRemaining(ctx.scratch(), .limited(1024 * 1024)));
 }
 
 fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, normalized_target: []const u8) ?*lockfile.Binding {

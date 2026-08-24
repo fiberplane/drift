@@ -1,0 +1,9 @@
+# drift fingerprints working-tree file content and records those fingerprints
+# in drift.lock, which every platform that checks this repo out then shares. Git
+# for Windows enables core.autocrlf by default, so without this a Windows
+# checkout gets CRLF, every fingerprint differs from the one Linux recorded, and
+# `drift check` reports the whole repo stale. `zig fmt` also rejects CRLF.
+#
+# Pin the working tree to LF everywhere. `text=auto` still leaves binary content
+# alone.
+* text=auto eol=lf

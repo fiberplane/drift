@@ -184,12 +184,22 @@ Every command creates two arena allocators backed by the GPA in `main()`. The **
 Additional modules:
 - `lockfile.zig` — read, write, and query `drift.lock` bindings; TOML parser and serializer
 - `markdown.zig` — markdown parsing via tree-sitter (block + inline grammars): link extraction, heading resolution, section fingerprinting
+- `repo_path.zig` — normalizes repo-relative paths to POSIX separators
+- `content.zig` — reads working-tree file content with CRLF collapsed to LF (binary content untouched)
 - `main.zig` — CLI entry point, argument parsing, subcommand dispatch
 - `commands/lint.zig` — lint engine: file/content caching, anchor staleness checks, report formatting
 - `commands/status.zig` — doc listing in text and JSON formats
 - `commands/link.zig` — anchor linking with auto-provenance (content signatures)
 - `commands/unlink.zig` — anchor removal from lockfile
 - `commands/refs.zig` — reverse lookup: which docs reference a given target
+
+### Cross-platform identity
+
+`drift.lock` is committed, so both halves of a binding have to mean the same
+thing on every platform that checks the repo out. Repo-relative paths are
+normalized to `/` where they are produced (`repo_path.zig`), and working-tree
+content is read with CRLF collapsed to LF unless it looks binary
+(`content.zig`). Rationale and edge cases: Decision 15 in `DECISIONS.md`.
 
 ### lockfile.zig
 
