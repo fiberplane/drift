@@ -26,10 +26,11 @@ pub fn run(
     var lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
-    const doc_content = content_mod.normalizeLineEndings(std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
+    const raw_doc_content = std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
         stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
         return error.DocReadFailed;
-    });
+    };
+    const doc_content = content_mod.normalizeLineEndings(raw_doc_content);
 
     const normalized_doc_path = try normalizeDocPath(ctx, lf.root_path, cwd_path, doc_path);
     ctx.resetScratch();

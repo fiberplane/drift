@@ -25,7 +25,7 @@ sig = "f3b812f15563f0a2"
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/link.zig"
-sig = "c110592afdb3cfd0"
+sig = "c87c4a5ee23cadc9"
 
 [[bindings]]
 doc = "docs/CLI.md"
@@ -50,7 +50,7 @@ sig = "d938905bf6073cea"
 [[bindings]]
 doc = "docs/DESIGN.md"
 target = "src/content.zig"
-sig = "cb5d9716d689d3ef"
+sig = "6d381fc98eb032b0"
 
 [[bindings]]
 doc = "docs/DESIGN.md"
@@ -95,12 +95,12 @@ sig = "7d0fe37e5eff5e30"
 [[bindings]]
 doc = "docs/RELEASING.md"
 target = ".github/workflows/ci.yml"
-sig = "d0c45a62e628ba46"
+sig = "15de5934583eb324"
 
 [[bindings]]
 doc = "docs/RELEASING.md"
 target = ".github/workflows/release.yml"
-sig = "ee4dcab45f915ace"
+sig = "4ce4ca9a5516959a"
 
 [[bindings]]
 doc = "docs/RELEASING.md"

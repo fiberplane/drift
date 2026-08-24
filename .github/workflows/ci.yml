@@ -62,7 +62,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    needs: [lint, test-windows]
+    needs: [lint]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -120,3 +120,4 @@ jobs:
         with:
           name: drift-${{ matrix.target }}
           path: drift-${{ matrix.target }}.*
+          if-no-files-found: error

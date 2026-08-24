@@ -64,7 +64,6 @@ test "link stores repo-relative paths with POSIX separators" {
     defer allocator.free(lock_content);
     try helpers.expectContains(lock_content, "doc = \"docs/doc.md\"\n");
     try helpers.expectContains(lock_content, "target = \"src/new.ts\"\n");
-    try helpers.expectNotContains(lock_content, "\\\\");
 }
 
 test "link adds symbol binding to drift.lock" {

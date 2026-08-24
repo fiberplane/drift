@@ -38,20 +38,28 @@ Native `x86_64` and `aarch64` builds ship as `drift-<arch>-windows.zip` on every
 your `PATH`:
 
 ```powershell
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
 $dest = "$env:LOCALAPPDATA\Programs\drift"
-Invoke-WebRequest -Uri https://github.com/fiberplane/drift/releases/latest/download/drift-x86_64-windows.zip -OutFile "$env:TEMP\drift.zip"
+Invoke-WebRequest -Uri "https://github.com/fiberplane/drift/releases/latest/download/drift-$arch-windows.zip" -OutFile "$env:TEMP\drift.zip"
 Expand-Archive -Path "$env:TEMP\drift.zip" -DestinationPath $dest -Force
-[Environment]::SetEnvironmentVariable("Path", "$([Environment]::GetEnvironmentVariable('Path', 'User'));$dest", "User")
+# Read the User Path unexpanded and write it back as REG_EXPAND_SZ, so
+# %VAR%-style entries survive; skip the append if drift is already on it.
+$path = (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+if (($path -split ';') -notcontains $dest) {
+  Set-ItemProperty HKCU:\Environment -Name Path -Value (@($path, $dest) -ne '' -join ';') -Type ExpandString
+}
 ```
 
 drift shells out to `git`, so [Git for Windows](https://git-scm.com/download/win)
 needs to be installed too. Nothing else is required — drift reads CRLF working
 trees as LF, so a `drift.lock` written on Windows matches one written on Linux.
 
-Or build from source:
+Or build from source and copy the binary into the same directory:
 
 ```powershell
-zig build -Doptimize=ReleaseSafe --prefix $env:LOCALAPPDATA\Programs\drift
+zig build -Doptimize=ReleaseSafe
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\drift" | Out-Null
+Copy-Item zig-out\bin\drift.exe "$env:LOCALAPPDATA\Programs\drift\"
 ```
 
 ### Coding agent skill (Claude Code, Codex)

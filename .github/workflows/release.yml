@@ -112,12 +112,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: drift-${{ matrix.target }}
-          path: |
-            drift-${{ matrix.target }}.tar.gz
-            drift-${{ matrix.target }}.tar.gz.sha256
-            drift-${{ matrix.target }}.zip
-            drift-${{ matrix.target }}.zip.sha256
-          if-no-files-found: ignore
+          path: drift-${{ matrix.target }}.*
+          if-no-files-found: error
 
   release:
     name: Create release
@@ -136,6 +132,7 @@ jobs:
           name: ${{ github.ref_name }}
           body: ${{ needs.generate-notes.outputs.body }}
           prerelease: false
+          fail_on_unmatched_files: true
           files: |
             drift-*.tar.gz
             drift-*.tar.gz.sha256

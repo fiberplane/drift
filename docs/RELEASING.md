@@ -11,7 +11,7 @@ The **lint** job: install Zig 0.16.0, build the project, run the full test suite
 
 The **test-windows** job runs the same build and test suite on a `windows-latest` runner, then `drift lint`. Windows is the one platform where path separators, line endings, and the executable suffix differ, so it is tested natively rather than only cross-compiled.
 
-The **build** job runs after **lint** and **test-windows** and cross-compiles release binaries for all six targets (aarch64-macos, x86_64-macos, x86_64-linux, aarch64-linux, x86_64-windows, aarch64-windows). Windows builds are packaged as `.zip` — Windows opens those without extra tooling but not `.tar.gz` — and everything else as a tarball.
+The **build** job runs after **lint** (test-windows gates merges as its own status check, in parallel) and cross-compiles release binaries for all six targets (aarch64-macos, x86_64-macos, x86_64-linux, aarch64-linux, x86_64-windows, aarch64-windows). Windows builds are packaged as `.zip` — Windows opens those without extra tooling but not `.tar.gz` — and everything else as a tarball.
 
 ## Releasing a version
 

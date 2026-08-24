@@ -9,20 +9,34 @@ const std = @import("std");
 ///
 /// Reading CRLF as LF makes the fingerprint depend on content alone. Files that
 /// are already LF-only come back byte-identical, so lockfiles written before
-/// this normalization stay valid.
+/// this normalization stay valid for them; a text file whose committed bytes
+/// genuinely contain CRLF re-fingerprints once and needs a relink.
+///
+/// Content that looks binary is left untouched: autocrlf never rewrites
+/// binaries, so their bytes already match across platforms — and collapsing
+/// CRLF there would make a CR-only difference invisible to the raw-byte
+/// fallback hash.
 ///
 /// A lone CR (classic Mac line ending) is left alone: no tooling in this
 /// pipeline produces it, and rewriting it would change fingerprints for repos
 /// that genuinely contain one.
 pub fn normalizeLineEndings(buf: []u8) []u8 {
-    var out: usize = 0;
-    var i: usize = 0;
+    if (looksBinary(buf)) return buf;
+    const first_cr = std.mem.indexOfScalar(u8, buf, '\r') orelse return buf;
+    var out: usize = first_cr;
+    var i: usize = first_cr;
     while (i < buf.len) : (i += 1) {
         if (buf[i] == '\r' and i + 1 < buf.len and buf[i + 1] == '\n') continue;
         buf[out] = buf[i];
         out += 1;
     }
     return buf[0..out];
+}
+
+/// Git's heuristic: a NUL byte in the first 8000 bytes marks content binary.
+fn looksBinary(buf: []const u8) bool {
+    const window = buf[0..@min(buf.len, 8000)];
+    return std.mem.indexOfScalar(u8, window, 0) != null;
 }
 
 test "normalizeLineEndings strips CR only before LF" {
@@ -46,4 +60,20 @@ test "normalizeLineEndings makes CRLF and LF sources hash alike" {
         normalizeLineEndings(&lf),
         normalizeLineEndings(&crlf),
     );
+}
+
+test "normalizeLineEndings leaves binary content untouched" {
+    // A NUL byte marks the buffer binary; the CRLF must survive so the
+    // raw-byte fallback hash can still see a CR-only change.
+    var binary = "PK\x00\x03header\r\npayload".*;
+    try std.testing.expectEqualStrings("PK\x00\x03header\r\npayload", normalizeLineEndings(&binary));
+
+    // NUL past the 8000-byte window does not mark the buffer binary.
+    var big: [8002]u8 = @splat('a');
+    big[8000] = 0;
+    big[0] = '\r';
+    big[1] = '\n';
+    const normalized = normalizeLineEndings(&big);
+    try std.testing.expectEqual(@as(usize, 8001), normalized.len);
+    try std.testing.expectEqual(@as(u8, '\n'), normalized[0]);
 }

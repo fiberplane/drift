@@ -183,8 +183,15 @@ would read stale on Windows. This affects any fingerprint that reaches raw bytes
 — the no-grammar fallback, markdown sections — and also grammar-based ones,
 since a line comment's token text runs to the end of the line and would swallow
 the `\r`. Content that is already LF-only hashes unchanged, so lockfiles written
-before this normalization stay valid. A lone CR is left alone; nothing in this
-pipeline produces one.
+before this normalization stay valid for LF-only files; a text file whose
+committed bytes genuinely contain CRLF (e.g. `eol=crlf` attributes) re-fingerprints
+once and needs a relink.
+
+Content that looks binary — a NUL byte in the first 8000 bytes, git's own
+heuristic — is left untouched: autocrlf never rewrites binaries, so their bytes
+already match across platforms, and collapsing CRLF there would make a CR-only
+change invisible to the raw-byte fallback hash. A lone CR is left alone; nothing
+in this pipeline produces one.
 
 This repo also pins its own working tree to LF via `.gitattributes`, which is a
 separate concern: it keeps `zig fmt` happy for Windows contributors.
