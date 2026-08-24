@@ -49,7 +49,7 @@ pub fn run(
         ctx.resetScratch();
 
         const existing_binding = findBinding(lf.bindings.items, normalized_doc_path, normalized_target);
-        const old_sig = if (existing_binding) |b| b.fieldValue("sig") else null;
+        const old_sig = if (existing_binding) |b| try copySig(ctx, b) else null;
 
         upsertBinding(ctx, &lf, cwd_path, normalized_doc_path, normalized_target) catch |err| switch (err) {
             error.CannotComputeFingerprint => {
@@ -80,7 +80,7 @@ pub fn run(
     var refused_count: usize = 0;
     for (lf.bindings.items) |*binding| {
         if (!std.mem.eql(u8, binding.doc_path, normalized_doc_path)) continue;
-        const old_sig = binding.fieldValue("sig");
+        const old_sig = try copySig(ctx, binding);
         refreshBindingSig(ctx, cwd_path, lf.root_path, binding) catch |err| switch (err) {
             error.CannotComputeFingerprint => {
                 stderr_w.print("error: cannot compute fingerprint for target: {s}\n", .{binding.target}) catch {};
@@ -127,6 +127,17 @@ fn promptDocAccurate(io: std.Io, stderr_w: *std.Io.Writer) bool {
     const slice = stdin_reader.interface.takeDelimiterExclusive('\n') catch return false;
     const answer = std.mem.trimEnd(u8, slice, "\r\n \t");
     return answer.len > 0 and (answer[0] == 'y' or answer[0] == 'Y');
+}
+
+/// Copy a binding's current signature out before restamping it.
+///
+/// `Binding.setField` frees the previous value, so a slice held across
+/// `refreshBindingSig` dangles and the gate below would compare against freed
+/// memory — refusing or waving through a relink depending on what the allocator
+/// happened to leave there.
+fn copySig(ctx: CommandContext, binding: *const lockfile.Binding) !?[]const u8 {
+    const sig = binding.fieldValue("sig") orelse return null;
+    return try ctx.run_arena.dupe(u8, sig);
 }
 
 /// Returns true when a relink should be refused: target changed without review.

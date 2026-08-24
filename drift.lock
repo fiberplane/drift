@@ -25,7 +25,7 @@ sig = "f3b812f15563f0a2"
 [[bindings]]
 doc = "docs/CLI.md"
 target = "src/commands/link.zig"
-sig = "09d9f9988209c46b"
+sig = "c110592afdb3cfd0"
 
 [[bindings]]
 doc = "docs/CLI.md"
