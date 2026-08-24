@@ -160,3 +160,31 @@ We use tree-sitter for link extraction rather than regex because:
 - Tree-sitter markdown's `section` node provides heading-to-body grouping, which regex cannot reliably determine
 
 The two-parser architecture requires two passes per file: block grammar first (producing `inline` node ranges), then inline grammar on those ranges. This adds build complexity (two grammar C sources, two `ts.Language` instances) but is how the grammar is designed — block and inline are separate grammars with separate node types.
+
+## 15. Repo-relative paths are POSIX; file content is read as LF
+
+`drift.lock` is committed and shared by every platform that checks the repo out,
+so both halves of a binding have to mean the same thing everywhere.
+
+**Paths.** A repo-relative path is normalized to `/` at the point it is produced
+(`src/repo_path.zig`), not at the point it is written. Doc discovery matches
+lockfile bindings against `git ls-files` output, and git speaks POSIX separators
+on every platform while `std.Io.Dir.path` speaks the host separator — so on
+Windows a doc discovered as `docs/a.md` would never match a binding stored as
+`docs\a.md`. Normalizing on the way out also lets a Windows shell pass
+`docs\a.md` to `drift link` and get a portable lockfile back. Absolute paths are
+left in host form: they never leave the process.
+
+**Content.** Working-tree file content is read with CRLF collapsed to LF
+(`src/content.zig`). Git for Windows enables `core.autocrlf` by default, so the
+same commit yields different bytes on different machines; without this,
+fingerprints would track the checkout rather than the content and every anchor
+would read stale on Windows. This affects any fingerprint that reaches raw bytes
+— the no-grammar fallback, markdown sections — and also grammar-based ones,
+since a line comment's token text runs to the end of the line and would swallow
+the `\r`. Content that is already LF-only hashes unchanged, so lockfiles written
+before this normalization stay valid. A lone CR is left alone; nothing in this
+pipeline produces one.
+
+This repo also pins its own working tree to LF via `.gitattributes`, which is a
+separate concern: it keeps `zig fmt` happy for Windows contributors.

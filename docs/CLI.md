@@ -101,6 +101,11 @@ relinked all anchors in docs/auth.md
 
 Each anchor gets its own content signature computed from the current file on disk.
 
+**Path normalization** — doc and target paths are recorded relative to the
+lockfile root with `/` separators, whatever the shell passed in. On Windows,
+`drift link docs\auth.md src\auth\session.ts` records `docs/auth.md` and
+`src/auth/session.ts`, so the lockfile stays identical across platforms.
+
 **Relink gate** — when relinking a stale anchor (target signature changed), the relink is refused and both sides are printed (doc section and current code). This prevents blindly restamping without reviewing documentation. Pass `--doc-is-still-accurate` to confirm you've reviewed the doc and it doesn't need changes.
 
 ## drift unlink

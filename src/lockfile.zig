@@ -1,5 +1,9 @@
 const std = @import("std");
 
+/// Host path separator. `discover` returns absolute paths, which stay in host
+/// form — only repo-relative paths are normalized to POSIX (see `repo_path`).
+const sep = std.Io.Dir.path.sep_str;
+
 pub const MetadataField = struct {
     key: []const u8,
     value: []const u8,
@@ -818,8 +822,8 @@ test "discover walks up to find drift.lock" {
 
     try std.testing.expect(discovered.exists);
     try std.testing.expectEqual(@as(usize, 1), discovered.bindings.items.len);
-    try std.testing.expect(std.mem.endsWith(u8, discovered.root_path, "/repo"));
-    try std.testing.expect(std.mem.endsWith(u8, discovered.lockfile_path, "/repo/drift.lock"));
+    try std.testing.expect(std.mem.endsWith(u8, discovered.root_path, sep ++ "repo"));
+    try std.testing.expect(std.mem.endsWith(u8, discovered.lockfile_path, sep ++ "repo" ++ sep ++ "drift.lock"));
 }
 
 test "discover returns empty lockfile rooted at start path when missing" {
@@ -846,5 +850,5 @@ test "discover returns empty lockfile rooted at start path when missing" {
     try std.testing.expect(!discovered.exists);
     try std.testing.expectEqual(@as(usize, 0), discovered.bindings.items.len);
     try std.testing.expectEqualStrings(start_path, discovered.root_path);
-    try std.testing.expect(std.mem.endsWith(u8, discovered.lockfile_path, "/repo/drift.lock"));
+    try std.testing.expect(std.mem.endsWith(u8, discovered.lockfile_path, sep ++ "repo" ++ sep ++ "drift.lock"));
 }

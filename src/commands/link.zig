@@ -1,7 +1,9 @@
 const std = @import("std");
 const CommandContext = @import("../context.zig").CommandContext;
+const content_mod = @import("../content.zig");
 const lockfile = @import("../lockfile.zig");
 const markdown = @import("../markdown.zig");
+const repo_path = @import("../repo_path.zig");
 const symbols = @import("../symbols.zig");
 const target = @import("../target.zig");
 
@@ -24,10 +26,10 @@ pub fn run(
     var lf = try lockfile.discover(ctx.io, ctx.run_arena, ctx.scratch(), doc_dir);
     ctx.resetScratch();
 
-    const doc_content = std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
+    const doc_content = content_mod.normalizeLineEndings(std.Io.Dir.cwd().readFileAlloc(ctx.io, doc_path, ctx.run_arena, .limited(1024 * 1024)) catch |err| {
         stderr_w.print("error: cannot read '{s}': {s}\n", .{ doc_path, @errorName(err) }) catch {};
         return error.DocReadFailed;
-    };
+    });
 
     const normalized_doc_path = try normalizeDocPath(ctx, lf.root_path, cwd_path, doc_path);
     ctx.resetScratch();
@@ -238,7 +240,7 @@ fn normalizeDocPath(
     doc_path: []const u8,
 ) ![]const u8 {
     const absolute = try resolveInputPath(ctx, root_path, cwd_path, doc_path);
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
     ctx.resetScratch();
     return relative;
 }
@@ -256,7 +258,7 @@ fn normalizeTargetPath(
         return error.TargetNotFound;
     }
 
-    const relative = try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute);
+    const relative = repo_path.normalize(try std.Io.Dir.path.relative(ctx.run_arena, "", null, root_path, absolute));
 
     if (parsed.symbol_name) |symbol| {
         if (parsed.isHeading()) {
@@ -308,7 +310,7 @@ fn readResolvedFile(ctx: CommandContext, path: []const u8) ![]const u8 {
         try std.Io.Dir.cwd().openFile(ctx.io, path, .{});
     defer file.close(ctx.io);
     var file_reader = file.reader(ctx.io, &.{});
-    return try file_reader.interface.allocRemaining(ctx.scratch(), .limited(1024 * 1024));
+    return content_mod.normalizeLineEndings(try file_reader.interface.allocRemaining(ctx.scratch(), .limited(1024 * 1024)));
 }
 
 fn findBinding(bindings: []lockfile.Binding, doc_path: []const u8, normalized_target: []const u8) ?*lockfile.Binding {

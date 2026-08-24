@@ -184,12 +184,31 @@ Every command creates two arena allocators backed by the GPA in `main()`. The **
 Additional modules:
 - `lockfile.zig` — read, write, and query `drift.lock` bindings; TOML parser and serializer
 - `markdown.zig` — markdown parsing via tree-sitter (block + inline grammars): link extraction, heading resolution, section fingerprinting
+- `repo_path.zig` — normalizes repo-relative paths to POSIX separators
+- `content.zig` — reads working-tree file content with CRLF collapsed to LF
 - `main.zig` — CLI entry point, argument parsing, subcommand dispatch
 - `commands/lint.zig` — lint engine: file/content caching, anchor staleness checks, report formatting
 - `commands/status.zig` — doc listing in text and JSON formats
 - `commands/link.zig` — anchor linking with auto-provenance (content signatures)
 - `commands/unlink.zig` — anchor removal from lockfile
 - `commands/refs.zig` — reverse lookup: which docs reference a given target
+
+### Cross-platform identity
+
+`drift.lock` is committed, so both halves of a binding have to mean the same
+thing on every platform that checks the repo out.
+
+A repo-relative path is normalized to `/` where it is produced, not where it is
+written (`repo_path.zig`). Doc discovery matches bindings against `git ls-files`,
+which is POSIX everywhere, while `std.Io.Dir.path` follows the host — so on
+Windows a doc discovered as `docs/a.md` would never match a binding stored as
+`docs\a.md`. Absolute paths stay in host form; they never leave the process.
+
+Working-tree content is read with CRLF collapsed to LF (`content.zig`). Git for
+Windows turns on `core.autocrlf` by default, so the same commit yields different
+bytes on different machines; without this, fingerprints would track the checkout
+rather than the content. Content that is already LF-only hashes unchanged, so
+existing lockfiles stay valid. See Decision 15 in `DECISIONS.md`.
 
 ### lockfile.zig
 

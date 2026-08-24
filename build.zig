@@ -79,7 +79,10 @@ pub fn build(b: *std.Build) void {
 
     // Tests — build options for integration tests
     const test_options = b.addOptions();
-    test_options.addOption([]const u8, "drift_bin", b.getInstallPath(.bin, "drift"));
+    // Integration tests spawn the installed binary by path, so it needs the
+    // host's executable extension (`drift.exe` on Windows).
+    const drift_bin_name = b.fmt("drift{s}", .{target.result.exeFileExt()});
+    test_options.addOption([]const u8, "drift_bin", b.getInstallPath(.bin, drift_bin_name));
 
     // Property-test seed. Defaults to the git HEAD hash (first 16 hex chars as
     // u64) so each commit explores a different slice of the state space; pass
