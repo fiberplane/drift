@@ -66,6 +66,15 @@ jobs:
           - target: aarch64-linux
             runner: ubuntu-22.04
             zig-target: aarch64-linux-gnu
+          - target: x86_64-windows
+            runner: ubuntu-22.04
+            zig-target: x86_64-windows-gnu
+            zig-cpu: baseline
+            windows: true
+          - target: aarch64-windows
+            runner: ubuntu-22.04
+            zig-target: aarch64-windows-gnu
+            windows: true
 
     steps:
       - name: Checkout
@@ -81,15 +90,22 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseSafe -Dversion=${{ github.ref_name }} -Dtarget=${{ matrix.zig-target }} ${{ matrix.zig-cpu && format('-Dcpu={0}', matrix.zig-cpu) || '' }}
 
+      # Windows can open a .zip without extra tooling but not a .tar.gz, so
+      # Windows builds ship as .zip and everything else as .tar.gz.
       - name: Package
         run: |
-          TAR="drift-${{ matrix.target }}.tar.gz"
-          tar -czf "$TAR" -C zig-out/bin drift
+          if [ -n "${{ matrix.windows }}" ]; then
+            ARCHIVE="drift-${{ matrix.target }}.zip"
+            zip -q -j -X "$ARCHIVE" zig-out/bin/drift.exe
+          else
+            ARCHIVE="drift-${{ matrix.target }}.tar.gz"
+            tar -czf "$ARCHIVE" -C zig-out/bin drift
+          fi
 
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$TAR" | cut -d' ' -f1 > "$TAR.sha256"
+            sha256sum "$ARCHIVE" | cut -d' ' -f1 > "$ARCHIVE.sha256"
           else
-            shasum -a 256 "$TAR" | cut -d' ' -f1 > "$TAR.sha256"
+            shasum -a 256 "$ARCHIVE" | cut -d' ' -f1 > "$ARCHIVE.sha256"
           fi
 
       - name: Upload artifact
@@ -99,6 +115,9 @@ jobs:
           path: |
             drift-${{ matrix.target }}.tar.gz
             drift-${{ matrix.target }}.tar.gz.sha256
+            drift-${{ matrix.target }}.zip
+            drift-${{ matrix.target }}.zip.sha256
+          if-no-files-found: ignore
 
   release:
     name: Create release
@@ -120,6 +139,8 @@ jobs:
           files: |
             drift-*.tar.gz
             drift-*.tar.gz.sha256
+            drift-*.zip
+            drift-*.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

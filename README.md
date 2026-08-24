@@ -31,6 +31,29 @@ Or build from source:
 zig build -Doptimize=ReleaseSafe --prefix ~/.local
 ```
 
+### Windows
+
+Native `x86_64` and `aarch64` builds ship as `drift-<arch>-windows.zip` on every
+[release](https://github.com/fiberplane/drift/releases). Unzip `drift.exe` onto
+your `PATH`:
+
+```powershell
+$dest = "$env:LOCALAPPDATA\Programs\drift"
+Invoke-WebRequest -Uri https://github.com/fiberplane/drift/releases/latest/download/drift-x86_64-windows.zip -OutFile "$env:TEMP\drift.zip"
+Expand-Archive -Path "$env:TEMP\drift.zip" -DestinationPath $dest -Force
+[Environment]::SetEnvironmentVariable("Path", "$([Environment]::GetEnvironmentVariable('Path', 'User'));$dest", "User")
+```
+
+drift shells out to `git`, so [Git for Windows](https://git-scm.com/download/win)
+needs to be installed too. Nothing else is required — drift reads CRLF working
+trees as LF, so a `drift.lock` written on Windows matches one written on Linux.
+
+Or build from source:
+
+```powershell
+zig build -Doptimize=ReleaseSafe --prefix $env:LOCALAPPDATA\Programs\drift
+```
+
 ### Coding agent skill (Claude Code, Codex)
 
 ```bash
