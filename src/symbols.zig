@@ -12,6 +12,7 @@ extern fn tree_sitter_rust() callconv(.c) *const ts.Language;
 extern fn tree_sitter_go() callconv(.c) *const ts.Language;
 extern fn tree_sitter_zig() callconv(.c) *const ts.Language;
 extern fn tree_sitter_java() callconv(.c) *const ts.Language;
+extern fn tree_sitter_kotlin() callconv(.c) *const ts.Language;
 
 pub const LanguageQuery = struct {
     language: *const ts.Language,
@@ -39,6 +40,9 @@ pub fn languageForExtension(ext: []const u8) ?LanguageQuery {
     }
     if (std.mem.eql(u8, ext, ".java")) {
         return .{ .language = tree_sitter_java(), .query_source = @embedFile("queries/java.scm") };
+    }
+    if (std.mem.eql(u8, ext, ".kt") or std.mem.eql(u8, ext, ".kts")) {
+        return .{ .language = tree_sitter_kotlin(), .query_source = @embedFile("queries/kotlin.scm") };
     }
     return null;
 }
@@ -104,6 +108,45 @@ fn fingerprintNodeSyntax(source: []const u8, node: ts.Node) u64 {
     return hasher.final();
 }
 
+// fwcd/tree-sitter-kotlin can put accessors on following lines beside a
+// property_declaration rather than inside it. Include those accessors in the
+// property's fingerprint and extracted range, but not the next declaration.
+fn kotlinPropertyEnd(node: ts.Node) ts.Node {
+    var last = node;
+    var next = node.nextNamedSibling();
+    while (next) |sibling| : (next = sibling.nextNamedSibling()) {
+        const kind = sibling.kind();
+        if (std.mem.eql(u8, kind, "getter") or std.mem.eql(u8, kind, "setter")) {
+            last = sibling;
+        } else if (!std.mem.eql(u8, kind, "line_comment") and !std.mem.eql(u8, kind, "multiline_comment")) {
+            break;
+        }
+    }
+    return last;
+}
+
+fn fingerprintKotlinProperty(source: []const u8, node: ts.Node) u64 {
+    var hasher = std.hash.XxHash3.init(0);
+    hashTaggedBytes(&hasher, '(', node.kind());
+
+    var child_index: u32 = 0;
+    while (child_index < node.childCount()) : (child_index += 1) {
+        hashNormalizedNodeSyntax(&hasher, source, node.child(child_index).?);
+    }
+
+    // Fold sibling accessors into the same property node as inline accessors,
+    // so moving an accessor to its own line does not change the fingerprint.
+    const end = kotlinPropertyEnd(node).endByte();
+    var next = node.nextNamedSibling();
+    while (next) |sibling| : (next = sibling.nextNamedSibling()) {
+        if (sibling.endByte() > end) break;
+        hashNormalizedNodeSyntax(&hasher, source, sibling);
+    }
+
+    hashTaggedBytes(&hasher, ')', node.kind());
+    return hasher.final();
+}
+
 /// Compute a normalized syntax fingerprint for an entire file.
 ///
 /// The fingerprint is based on the file's tree-sitter syntax tree, not its raw
@@ -143,6 +186,9 @@ pub fn fingerprintSymbolSyntax(
     defer query.destroy();
 
     const definition_node = findMatchingDefinitionNode(query, tree.rootNode(), source, target_symbol) orelse return null;
+    if (lang_query.language == tree_sitter_kotlin() and std.mem.eql(u8, definition_node.kind(), "property_declaration")) {
+        return fingerprintKotlinProperty(source, definition_node);
+    }
     return fingerprintNodeSyntax(source, definition_node);
 }
 
@@ -166,6 +212,9 @@ pub fn extractSymbolContent(
     defer query.destroy();
 
     const definition_node = findMatchingDefinitionNode(query, tree.rootNode(), source, target_symbol) orelse return null;
+    if (lang_query.language == tree_sitter_kotlin() and std.mem.eql(u8, definition_node.kind(), "property_declaration")) {
+        return .{ definition_node.startByte(), kotlinPropertyEnd(definition_node).endByte() };
+    }
     return .{ definition_node.startByte(), definition_node.endByte() };
 }
 
@@ -218,7 +267,7 @@ test "fingerprintFileSyntax works for zig source" {
 }
 
 test "symbol queries compile for every supported language" {
-    const extensions = [_][]const u8{ ".ts", ".py", ".rs", ".go", ".zig", ".java" };
+    const extensions = [_][]const u8{ ".ts", ".py", ".rs", ".go", ".zig", ".java", ".kt", ".kts" };
     for (extensions) |ext| {
         const lang_query = languageForExtension(ext) orelse return error.TestUnexpectedResult;
         var error_offset: u32 = 0;
@@ -259,15 +308,77 @@ test "zig variable_declaration query matches only the declared name, not the ini
     try std.testing.expect(fingerprintSymbolSyntax(source, lang_query, "imported_name") == null);
 }
 
+test "Kotlin queries resolve declaration families" {
+    const source = @embedFile("../test/fixtures/kotlin/declarations.kt");
+    for ([_][]const u8{ "State", "IDLE", "Item", "Worker", "run", "Registry", "count", "Container", "Factory", "create", "Label", "limit", "twice" }) |name| {
+        try std.testing.expect(computeFingerprint(source, "sample.kt", name) != null);
+    }
+    try std.testing.expect(computeFingerprint(source, "sample.kt", "missing") == null);
+}
+
+test "Kotlin fingerprints ignore formatting and isolate function changes" {
+    const initial = "fun twice(value: Int): Int { return value * 2 }\nfun other(): Int = 1\n";
+    const formatted = "fun twice(\n    value: Int\n): Int {\n    return value * 2\n}\nfun other(): Int = 1\n";
+    const reordered = "fun other(): Int = 99\nfun twice(value: Int): Int { return value * 2 }\n";
+    const changed = "fun twice(value: Int): Int { return value * 3 }\nfun other(): Int = 1\n";
+    for ([_][]const u8{ "sample.kt", "sample.kts" }) |path| {
+        const original = computeFingerprint(initial, path, "twice") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(original, computeFingerprint(formatted, path, "twice").?);
+        try std.testing.expectEqual(original, computeFingerprint(reordered, path, "twice").?);
+        try std.testing.expect(original != computeFingerprint(changed, path, "twice").?);
+        try std.testing.expectEqual(computeFingerprint(initial, path, null).?, computeFingerprint(formatted, path, null).?);
+        try std.testing.expect(computeFingerprint(initial, path, null).? != computeFingerprint(changed, path, null).?);
+    }
+}
+
+test "Kotlin scripts support shebang and executable statements" {
+    const source = "#!/usr/bin/env kotlin\nfun twice(value: Int): Int = value * 2\nprintln(twice(3))\n";
+    try std.testing.expect(computeFingerprint(source, "sample.kts", null) != null);
+    try std.testing.expect(computeFingerprint(source, "sample.kts", "twice") != null);
+}
+
+test "Kotlin property getter and setter changes alter the property fingerprint" {
+    const initial = "class Counter {\nvar amount: Int = 0\nget() = field\nset(value) { field = value + 1 }\n}\n";
+    const changed_getter = "class Counter {\nvar amount: Int = 0\nget() = field + 2\nset(value) { field = value + 1 }\n}\n";
+    const changed_setter = "class Counter {\nvar amount: Int = 0\nget() = field\nset(value) { field = value + 3 }\n}\n";
+    const original = computeFingerprint(initial, "sample.kt", "amount") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(original != computeFingerprint(changed_getter, "sample.kt", "amount").?);
+    try std.testing.expect(original != computeFingerprint(changed_setter, "sample.kt", "amount").?);
+}
+
+test "Kotlin property extraction includes accessors but not the following declaration" {
+    const property = "var amount: Int = 0\n// getter\nget() = field\n/* setter */\nset(value) { field = value + 1 }";
+    const source = property ++ "\n// unrelated\nfun other(): Int = 99\n";
+    const lang_query = languageForExtension(".kt").?;
+    const range = extractSymbolContent(source, lang_query, "amount") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(property, source[range[0]..range[1]]);
+}
+
+test "Kotlin property accessor layout and following declarations do not alter its fingerprint" {
+    const initial = "var amount: Int = 0 get() = field\nset(value) { field = value }\nfun other(): Int = 1\n";
+    const formatted = "var amount: Int = 0\nget() = field\nset(value) { field = value }\nfun other(): Int = 99\n";
+    try std.testing.expectEqual(computeFingerprint(initial, "sample.kt", "amount").?, computeFingerprint(formatted, "sample.kt", "amount").?);
+}
+
+test "Kotlin accessor visibility changes alter the property fingerprint" {
+    const initial = "class Counter {\nvar amount: Int = 0\nprivate set\n}\n";
+    const changed = "class Counter {\nvar amount: Int = 0\ninternal set\n}\n";
+    try std.testing.expect(computeFingerprint(initial, "sample.kt", "amount").? != computeFingerprint(changed, "sample.kt", "amount").?);
+}
+
+test "Kotlin property does not include the next property's accessors" {
+    const property = "val first: Int = 1";
+    const initial = property ++ "\n// second property\nvar second: Int = 0\nset(value) { field = value }\n";
+    const changed = property ++ "\n// second property\nvar second: Int = 0\nset(value) { field = value + 1 }\n";
+    const lang_query = languageForExtension(".kt").?;
+    const range = extractSymbolContent(initial, lang_query, "first") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(property, initial[range[0]..range[1]]);
+    try std.testing.expectEqual(computeFingerprint(initial, "sample.kt", "first").?, computeFingerprint(changed, "sample.kt", "first").?);
+}
+
 test "computeFingerprint matches for real zig files" {
-    const allocator = std.testing.allocator;
-
-    const files = [_][]const u8{ "src/main.zig", "src/markdown.zig", "src/lockfile.zig", "src/vcs.zig" };
-    for (files) |path| {
-        const content = std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024) catch continue;
-        defer allocator.free(content);
-
-        const fp = computeFingerprint(content, path, null);
+    inline for (.{ "main.zig", "markdown.zig", "lockfile.zig", "vcs.zig" }) |path| {
+        const fp = computeFingerprint(@embedFile(path), path, null);
         try std.testing.expect(fp != null);
     }
 }

@@ -124,7 +124,9 @@ drift refs          Reverse lookup — which docs reference a given file
 
 ## How staleness works
 
-Each anchor's `sig` field records a fingerprint of the code at the time it was linked. `drift check` recomputes the fingerprint from the current file and compares. For supported languages (TypeScript, Python, Rust, Go, Zig, Java), comparison is syntax-aware — drift parses with tree-sitter and hashes a normalized AST fingerprint (node kinds + token text, no whitespace or position data). Reformatting won't trigger false positives. Symbol-level anchors (`#AuthConfig`) narrow this to just that declaration's subtree. Unsupported languages fall back to raw content comparison.
+Each anchor's `sig` field records a fingerprint of the code at the time it was linked. `drift check` recomputes the fingerprint from the current file and compares. For supported languages (TypeScript, Python, Rust, Go, Zig, Java, Kotlin), comparison is syntax-aware — drift parses with tree-sitter and hashes a normalized AST fingerprint (node kinds + token text, no whitespace or position data). Reformatting that preserves the parsed syntax tree won't trigger false positives. Symbol-level anchors (`#AuthConfig`) narrow this to just that declaration's subtree. Unsupported languages fall back to raw content comparison.
+
+Kotlin support covers `.kt` and `.kts` files using `fwcd/tree-sitter-kotlin` 0.3.8. Symbol anchors support classes, interfaces, objects, named companion objects, functions, properties (including getters and setters), enum entries, and type aliases. Constructor parameter properties, destructuring names, and unnamed companion objects are not separate symbol targets; anchor the enclosing declaration or file instead. Symbol names are unqualified and select the first match, as for other languages. Parser limitations can still affect fingerprints; for example, moving comments around accessors can change the parsed tree.
 
 No VCS history is needed for staleness detection — `drift check` works entirely from the stored signature and current file content.
 
