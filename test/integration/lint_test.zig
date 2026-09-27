@@ -65,6 +65,51 @@ fn expectFormattingOnlySymbolChangeIsFresh(
     try helpers.expectNotContains(check_result.stdout, "STALE");
 }
 
+test "Kotlin symbol anchors remain fresh for formatting and stale for edits or removal" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+
+    try repo.writeFile("src/example.kt", "fun twice(value: Int): Int { return value * 2 }\n");
+    try repo.writeFile("docs/doc.md", "# Kotlin function\n");
+    try linkDoc(&repo, "docs/doc.md", "src/example.kt#twice");
+
+    const fresh = try repo.runDrift(&.{"check"});
+    defer fresh.deinit(allocator);
+    try helpers.expectExitCode(fresh.term, 0);
+
+    try repo.writeFile("src/example.kt", "fun other(): Int = 1\nfun twice(\n value: Int\n): Int {\n return value * 2\n}\n");
+    const formatted = try repo.runDrift(&.{"check"});
+    defer formatted.deinit(allocator);
+    try helpers.expectExitCode(formatted.term, 0);
+
+    try repo.writeFile("src/example.kt", "fun twice(value: Int): Int { return value * 3 }\n");
+    const changed = try repo.runDrift(&.{"check"});
+    defer changed.deinit(allocator);
+    try helpers.expectExitCode(changed.term, 1);
+    try helpers.expectContains(changed.stdout, "changed after doc");
+
+    try repo.writeFile("src/example.kt", "fun other(): Int = 1\n");
+    const removed = try repo.runDrift(&.{"check"});
+    defer removed.deinit(allocator);
+    try helpers.expectExitCode(removed.term, 1);
+    try helpers.expectContains(removed.stdout, "symbol not found");
+}
+
+test "Kotlin property anchors detect accessor edits" {
+    const allocator = std.testing.allocator;
+    var repo = try helpers.TempRepo.init(allocator);
+    defer repo.cleanup();
+    try repo.writeFile("src/example.kt", "class Counter {\nvar amount: Int = 0\nget() = field\nset(value) { field = value }\n}\n");
+    try repo.writeFile("docs/doc.md", "# Kotlin property\n");
+    try linkDoc(&repo, "docs/doc.md", "src/example.kt#amount");
+    try repo.writeFile("src/example.kt", "class Counter {\nvar amount: Int = 0\nget() = field\nset(value) { field = value + 1 }\n}\n");
+    const changed = try repo.runDrift(&.{"check"});
+    defer changed.deinit(allocator);
+    try helpers.expectExitCode(changed.term, 1);
+    try helpers.expectContains(changed.stdout, "changed after doc");
+}
+
 test "lint reports ok when no lockfile exists" {
     const allocator = std.testing.allocator;
     var repo = try helpers.TempRepo.init(allocator);

@@ -55,6 +55,11 @@
             .hash = "N-V-__8AAOphUwCl_jXY5BvJ_I-kB6cZuE48ZpMar9Gq2SiD",
             .lazy = true,
         },
+        .tree_sitter_kotlin = .{
+            .url = "git+https://github.com/fwcd/tree-sitter-kotlin?ref=0.3.8#e1a2d5ad1f61f5740677183cd4125bb071cd2f30",
+            .hash = "N-V-__8AAJDidQH49dvfObVZZawejaO4XMsuHJtV-esBrGJc",
+            .lazy = true,
+        },
         .minish = .{
             .url = "https://github.com/CogitatorTech/minish/archive/v0.3.0.tar.gz",
             .hash = "minish-0.3.0-SQtSTYI3AgCxWdWbKxS_lvmfbp0wJk29ZW5C9CozJaxm",
